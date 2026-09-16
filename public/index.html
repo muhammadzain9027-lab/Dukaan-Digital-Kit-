@@ -1,0 +1,2249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Dukaan Digital Kit - کپڑے کی دکان</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <meta name="theme-color" content="#0F5132" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <!-- Google Fonts: Inter & Noto Nastaliq Urdu -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Nastaliq+Urdu:wght@400;600;700&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            emerald: { 850: '#0B3E26', 900: '#0F5132', 950: '#062919' },
+            gold: { 400: '#FBBF24', 500: '#D97706', 600: '#B45309' }
+          },
+          fontFamily: {
+            urdu: ['"Noto Nastaliq Urdu"', 'serif'],
+            receipt: ['"Courier Prime"', 'monospace'],
+            sans: ['Inter', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+  <!-- idb library for IndexedDB -->
+  <script src="https://cdn.jsdelivr.net/npm/idb@7/build/umd.js"></script>
+  <!-- React and Babel -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    .urdu-font { font-family: 'Noto Nastaliq Urdu', serif; line-height: 1.85; }
+    /* Print Stylesheets */
+    @media print {
+      body * { visibility: hidden !important; }
+      #printable-area, #printable-area * { visibility: visible !important; }
+      #printable-area {
+        position: absolute !important;
+        left: 0 !important;
+        top: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        background: white !important;
+        color: black !important;
+      }
+      .no-print { display: none !important; }
+    }
+    .print-thermal {
+      width: 78mm !important;
+      max-width: 78mm !important;
+      margin: 0 auto;
+      font-family: 'Courier Prime', monospace;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+    .print-a4 {
+      width: 100% !important;
+      max-width: 210mm;
+      margin: 0 auto;
+      font-family: 'Inter', sans-serif;
+    }
+  </style>
+</head>
+<body class="bg-zinc-100 dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 min-h-screen transition-colors duration-200">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo, useRef } = React;
+
+    // --- Service Worker Registration ---
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration error', err));
+      });
+    }
+
+    // --- Canvas Image Compression Helper (500px max, webp, 0.6 quality) ---
+    function compressImageToWebP(file) {
+      return new Promise((resolve, reject) => {
+        if (!file || !file.type.startsWith('image/')) {
+          return reject(new Error('Invalid image file'));
+        }
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            const maxDim = 500;
+            let width = img.width;
+            let height = img.height;
+            if (width > maxDim || height > maxDim) {
+              if (width > height) {
+                height = Math.round((height * maxDim) / width);
+                width = maxDim;
+              } else {
+                width = Math.round((width * maxDim) / height);
+                height = maxDim;
+              }
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // Compress to webp at 0.6 quality
+            let result = canvas.toDataURL('image/webp', 0.6);
+            if (!result.startsWith('data:image/webp')) {
+              // fallback if browser lacks canvas webp write support
+              result = canvas.toDataURL('image/jpeg', 0.6);
+            }
+            resolve(result);
+          };
+          img.onerror = () => reject(new Error('Failed to load image'));
+          img.src = event.target.result;
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+    }
+
+    // --- IndexedDB Database Manager using idb ---
+    const DB_NAME = 'DukaanDigitalDB';
+    const DB_VERSION = 1;
+
+    async function initDatabase() {
+      return await idb.openDB(DB_NAME, DB_VERSION, {
+        upgrade(db) {
+          if (!db.objectStoreNames.contains('products')) {
+            db.createObjectStore('products', { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains('bills')) {
+            const billStore = db.createObjectStore('bills', { keyPath: 'id' });
+            billStore.createIndex('date', 'date');
+            billStore.createIndex('customerPhone', 'customerPhone');
+          }
+          if (!db.objectStoreNames.contains('khata')) {
+            const khataStore = db.createObjectStore('khata', { keyPath: 'id' });
+            khataStore.createIndex('customerPhone', 'customerPhone');
+            khataStore.createIndex('date', 'date');
+          }
+        }
+      });
+    }
+
+    const DEMO_PRODUCTS = [
+      { id: 1, name: "Grace Fabrics Royal Wash & Wear (Navy)", category: "Wash & Wear", price: 3800, stock: 18, image: null },
+      { id: 2, name: "Pasha Egyptian Latha 100% Cotton (White)", category: "Cotton", price: 4500, stock: 14, image: null },
+      { id: 3, name: "Kohinoor Jacquard Men's Kurta (Olive)", category: "Kurta", price: 3200, stock: 8, image: null },
+      { id: 4, name: "Bareeze Luxury Embroidered Lawn 3-Pc", category: "Ladies", price: 6500, stock: 12, image: null },
+      { id: 5, name: "Dynasty Executive Wash & Wear (Grey)", category: "Wash & Wear", price: 3600, stock: 4, image: null },
+      { id: 6, name: "Gul Ahmed Soft Boski Cotton (Cream)", category: "Cotton", price: 4200, stock: 3, image: null }
+    ];
+
+    const DEMO_BILLS = [
+      {
+        id: 1001,
+        billNo: 'DDK-1001',
+        date: new Date(Date.now() - 86400000 * 2).toISOString().slice(0, 10),
+        time: '03:30 PM',
+        customerName: 'Muhammad Rizwan',
+        customerPhone: '03017654321',
+        items: [{ id: 1, name: 'Grace Fabrics Royal Wash & Wear (Navy)', price: 3800, qty: 2 }],
+        subtotal: 7600,
+        discount: 200,
+        grandTotal: 7400,
+        paidAmount: 5000,
+        udhaarAmount: 2400,
+        receiptType: 'thermal'
+      },
+      {
+        id: 1002,
+        billNo: 'DDK-1002',
+        date: new Date(Date.now() - 86400000).toISOString().slice(0, 10),
+        time: '06:15 PM',
+        customerName: 'Chaudhry Bilal',
+        customerPhone: '03219876543',
+        items: [{ id: 2, name: 'Pasha Egyptian Latha 100% Cotton (White)', price: 4500, qty: 1 }],
+        subtotal: 4500,
+        discount: 0,
+        grandTotal: 4500,
+        paidAmount: 4500,
+        udhaarAmount: 0,
+        receiptType: 'a4'
+      }
+    ];
+
+    const DEMO_KHATA = [
+      {
+        id: 1,
+        customerPhone: '03017654321',
+        customerName: 'Muhammad Rizwan',
+        date: new Date(Date.now() - 86400000 * 2).toISOString().slice(0, 10),
+        type: 'credit', // credit means udhaar added
+        amount: 2400,
+        billId: 1001,
+        note: 'Bill #DDK-1001 Unpaid balance'
+      }
+    ];
+
+    // --- Main App Component ---
+    function App() {
+      // LocalStorage Shop Settings
+      const [lang, setLang] = useState(() => localStorage.getItem('ddk_lang') || 'ur');
+      const [dark, setDark] = useState(() => localStorage.getItem('ddk_dark') === 'true');
+      const [shop, setShop] = useState(() => {
+        const saved = localStorage.getItem('ddk_shop');
+        return saved ? JSON.parse(saved) : {
+          name: "المدینہ فیبرکس اینڈ کلاٹھ ہاؤس",
+          owner: "حاجی محمد طارق",
+          phone: "03001234567",
+          address: "دکان نمبر 24، مین کلاٹھ مارکیٹ، فیصل آباد",
+          logo: null
+        };
+      });
+
+      // PIN Lock State
+      const [pinCode, setPinCode] = useState(() => localStorage.getItem('ddk_pin') || '');
+      const [isLocked, setIsLocked] = useState(() => Boolean(localStorage.getItem('ddk_pin')));
+      const [enteredPin, setEnteredPin] = useState('');
+      const [pinError, setPinError] = useState('');
+      const [showPinSetupModal, setShowPinSetupModal] = useState(false);
+      const [newPinInput, setNewPinInput] = useState('');
+
+      // Navigation & Online State
+      const [tab, setTab] = useState('products'); // 'products' | 'billing' | 'sales' | 'khata' | 'dashboard' | 'settings'
+      const [isOnline, setIsOnline] = useState(navigator.onLine);
+      const [installPrompt, setInstallPrompt] = useState(null);
+
+      // IndexedDB Data State
+      const [dbReady, setDbReady] = useState(false);
+      const [products, setProducts] = useState([]);
+      const [bills, setBills] = useState([]);
+      const [khataEntries, setKhataEntries] = useState([]);
+
+      // Product Management
+      const [search, setSearch] = useState('');
+      const [category, setCategory] = useState('All');
+      const [lowStockFilter, setLowStockFilter] = useState(false);
+      const [modalProduct, setModalProduct] = useState(null);
+      const [showProductModal, setShowProductModal] = useState(false);
+
+      // Billing State
+      const [billItems, setBillItems] = useState([]);
+      const [customerName, setCustomerName] = useState('');
+      const [customerPhone, setCustomerPhone] = useState('');
+      const [discount, setDiscount] = useState(0);
+      const [paidAmountInput, setPaidAmountInput] = useState('');
+      const [receiptType, setReceiptType] = useState('thermal'); // 'thermal' (80mm) | 'a4'
+      const [activePrintBill, setActivePrintBill] = useState(null);
+
+      // Khata & Payment Modal
+      const [khataSearch, setKhataSearch] = useState('');
+      const [paymentModalCustomer, setPaymentModalCustomer] = useState(null);
+      const [paymentAmount, setPaymentAmount] = useState('');
+      const [paymentNote, setPaymentNote] = useState('');
+      const [viewLedgerCustomer, setViewLedgerCustomer] = useState(null);
+
+      // Sales Search
+      const [salesSearch, setSalesSearch] = useState('');
+
+      const isUrdu = lang === 'ur';
+
+      // --- PWA Offline & Install Handlers ---
+      useEffect(() => {
+        const handleOnline = () => setIsOnline(true);
+        const handleOffline = () => setIsOnline(false);
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        const handleBeforeInstall = (e) => {
+          e.preventDefault();
+          setInstallPrompt(e);
+        };
+        window.addEventListener('beforeinstallprompt', handleBeforeInstall);
+
+        return () => {
+          window.removeEventListener('online', handleOnline);
+          window.removeEventListener('offline', handleOffline);
+          window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
+        };
+      }, []);
+
+      // --- Shop Settings Persistence in localStorage ---
+      useEffect(() => {
+        localStorage.setItem('ddk_shop', JSON.stringify(shop));
+      }, [shop]);
+
+      useEffect(() => {
+        localStorage.setItem('ddk_lang', lang);
+      }, [lang]);
+
+      useEffect(() => {
+        localStorage.setItem('ddk_dark', dark);
+        if (dark) document.documentElement.classList.add('dark');
+        else document.documentElement.classList.remove('dark');
+      }, [dark]);
+
+      // --- Initialize IndexedDB and migrate / seed data ---
+      useEffect(() => {
+        async function loadDb() {
+          try {
+            const db = await initDatabase();
+            // Check products
+            let prods = await db.getAll('products');
+            if (!prods || prods.length === 0) {
+              // Check if legacy products exist in localStorage
+              const legacy = localStorage.getItem('ddk_products');
+              const seedData = legacy ? JSON.parse(legacy) : DEMO_PRODUCTS;
+              const tx = db.transaction('products', 'readwrite');
+              for (const p of seedData) {
+                await tx.store.put(p);
+              }
+              await tx.done;
+              localStorage.removeItem('ddk_products'); // Clean up
+              prods = seedData;
+            }
+            setProducts(prods);
+
+            // Check bills
+            let billList = await db.getAll('bills');
+            if (!billList || billList.length === 0) {
+              const tx = db.transaction('bills', 'readwrite');
+              for (const b of DEMO_BILLS) {
+                await tx.store.put(b);
+              }
+              await tx.done;
+              billList = DEMO_BILLS;
+            }
+            // Sort bills descending by date/id
+            billList.sort((a, b) => b.id - a.id);
+            setBills(billList);
+
+            // Check khata
+            let khataList = await db.getAll('khata');
+            if (!khataList || khataList.length === 0) {
+              const tx = db.transaction('khata', 'readwrite');
+              for (const k of DEMO_KHATA) {
+                await tx.store.put(k);
+              }
+              await tx.done;
+              khataList = DEMO_KHATA;
+            }
+            setKhataEntries(khataList);
+            setDbReady(true);
+          } catch (err) {
+            console.error('IndexedDB load failure', err);
+            setProducts(DEMO_PRODUCTS);
+            setBills(DEMO_BILLS);
+            setKhataEntries(DEMO_KHATA);
+            setDbReady(true);
+          }
+        }
+        loadDb();
+      }, []);
+
+      // --- PIN Unlock Logic ---
+      const handlePinPress = (digit) => {
+        if (enteredPin.length < 4) {
+          const next = enteredPin + digit;
+          setEnteredPin(next);
+          setPinError('');
+          if (next.length === 4) {
+            if (next === pinCode) {
+              setIsLocked(false);
+              setEnteredPin('');
+            } else {
+              setPinError(isUrdu ? 'غلط پن کوڈ! دوبارہ کوشش کریں' : 'Incorrect PIN! Try again');
+              if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+              setTimeout(() => {
+                setEnteredPin('');
+              }, 600);
+            }
+          }
+        }
+      };
+
+      const handlePinBackspace = () => {
+        setEnteredPin(prev => prev.slice(0, -1));
+        setPinError('');
+      };
+
+      // --- Filtered Products ---
+      const filteredProducts = useMemo(() => {
+        return products.filter(p => {
+          const matchQ = !search || p.name.toLowerCase().includes(search.toLowerCase()) || p.category.toLowerCase().includes(search.toLowerCase());
+          const matchC = category === 'All' || p.category === category;
+          const matchL = !lowStockFilter || p.stock < 5;
+          return matchQ && matchC && matchL;
+        });
+      }, [products, search, category, lowStockFilter]);
+
+      const lowStockCount = useMemo(() => products.filter(p => p.stock < 5).length, [products]);
+
+      // --- WhatsApp Link Generator ---
+      const getWhatsAppLink = (product) => {
+        const msg = isUrdu 
+          ? `السلام علیکم، مجھے کپڑا "${product.name}" درکار ہے، قیمت ${product.price} روپے۔`
+          : `Salam, I want ${product.name} Price ${product.price} PKR`;
+        const cleanPhone = (shop.phone || '').replace(/[^0-9]/g, '');
+        const intlPhone = cleanPhone.startsWith('03') ? '92' + cleanPhone.slice(1) : cleanPhone;
+        return `https://wa.me/${intlPhone}?text=${encodeURIComponent(msg)}`;
+      };
+
+      // --- Bill Calculations ---
+      const subtotal = useMemo(() => billItems.reduce((acc, it) => acc + (it.price * it.qty), 0), [billItems]);
+      const grandTotal = Math.max(0, subtotal - (Number(discount) || 0));
+      const actualPaid = paidAmountInput === '' ? grandTotal : Math.min(grandTotal, Math.max(0, Number(paidAmountInput) || 0));
+      const udhaarBalance = Math.max(0, grandTotal - actualPaid);
+
+      const addToBill = (prod) => {
+        setBillItems(prev => {
+          const idx = prev.findIndex(x => x.id === prod.id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
+            return next;
+          }
+          return [...prev, { id: prod.id, name: prod.name, price: prod.price, category: prod.category, qty: 1 }];
+        });
+      };
+
+      // --- Save Bill & Record Khata in IndexedDB ---
+      const handleSaveAndPrintBill = async () => {
+        if (billItems.length === 0) return;
+
+        // Mandatory validation: Customer phone is required for Udhaar (credit) transactions
+        if (udhaarBalance > 0) {
+          const rawDigits = (customerPhone || '').replace(/[^0-9]/g, '');
+          if (!rawDigits || rawDigits.length < 10) {
+            alert(isUrdu 
+              ? "ادھار (کھاتہ) بل محفوظ کرنے کے لیے گاہک کا درست موبائل فون نمبر (مثلاً 03001234567) درج کرنا لازمی ہے!" 
+              : "A valid customer phone number (e.g. 03001234567) is strictly required for Udhaar (Credit) bills!");
+            return;
+          }
+        }
+
+        const db = await initDatabase();
+        const billId = Date.now();
+        const newBill = {
+          id: billId,
+          billNo: `DDK-${billId.toString().slice(-4)}`,
+          date: new Date().toISOString().slice(0, 10),
+          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          customerName: customerName.trim() || (isUrdu ? 'عام گاہک' : 'Walk-in Customer'),
+          customerPhone: customerPhone.trim() || '---',
+          items: billItems,
+          subtotal,
+          discount: Number(discount) || 0,
+          grandTotal,
+          paidAmount: actualPaid,
+          udhaarAmount: udhaarBalance,
+          receiptType
+        };
+
+        // Save bill to IndexedDB
+        await db.put('bills', newBill);
+        setBills(prev => [newBill, ...prev]);
+
+        // If there is udhaar, save directly to Khata under customer's verified phone
+        if (udhaarBalance > 0) {
+          const khataEntry = {
+            id: Date.now() + 1,
+            customerPhone: customerPhone.trim(),
+            customerName: customerName.trim() || (isUrdu ? 'ادھار گاہک' : 'Credit Customer'),
+            date: new Date().toISOString().slice(0, 10),
+            type: 'credit',
+            amount: udhaarBalance,
+            billId: newBill.id,
+            note: `${isUrdu ? 'بل نمبر' : 'Bill'} #${newBill.billNo} ${isUrdu ? 'بقایا ادھار' : 'Udhaar'}`
+          };
+          await db.put('khata', khataEntry);
+          setKhataEntries(prev => [...prev, khataEntry]);
+        }
+
+        // Deduct inventory stock in IndexedDB
+        const updatedProducts = [...products];
+        const tx = db.transaction('products', 'readwrite');
+        for (const item of billItems) {
+          const pIndex = updatedProducts.findIndex(p => p.id === item.id);
+          if (pIndex >= 0) {
+            const updatedStock = Math.max(0, updatedProducts[pIndex].stock - item.qty);
+            updatedProducts[pIndex] = { ...updatedProducts[pIndex], stock: updatedStock };
+            await tx.store.put(updatedProducts[pIndex]);
+          }
+        }
+        await tx.done;
+        setProducts(updatedProducts);
+
+        // Open print view
+        setActivePrintBill(newBill);
+        setTimeout(() => {
+          window.print();
+        }, 150);
+
+        // Reset billing inputs
+        setBillItems([]);
+        setCustomerName('');
+        setCustomerPhone('');
+        setDiscount(0);
+        setPaidAmountInput('');
+      };
+
+      // --- Customers Khata Aggregation ---
+      const customerKhataSummary = useMemo(() => {
+        const map = {};
+        // Group transactions by customerPhone
+        khataEntries.forEach(entry => {
+          const phone = (entry.customerPhone || '03000000000').trim();
+          if (!map[phone]) {
+            map[phone] = {
+              phone,
+              name: entry.customerName || (isUrdu ? 'گاہک' : 'Customer'),
+              totalPurchases: 0,
+              totalPaid: 0,
+              udhaarBalance: 0,
+              transactions: []
+            };
+          }
+          map[phone].transactions.push(entry);
+          if (entry.type === 'credit') {
+            map[phone].udhaarBalance += entry.amount;
+            map[phone].totalPurchases += entry.amount;
+          } else if (entry.type === 'payment') {
+            map[phone].udhaarBalance -= entry.amount;
+            map[phone].totalPaid += entry.amount;
+          }
+        });
+
+        // Also aggregate bills
+        bills.forEach(bill => {
+          const phone = (bill.customerPhone || '').trim();
+          if (phone && phone !== '---') {
+            if (!map[phone]) {
+              map[phone] = {
+                phone,
+                name: bill.customerName,
+                totalPurchases: bill.grandTotal,
+                totalPaid: bill.paidAmount,
+                udhaarBalance: bill.udhaarAmount,
+                transactions: []
+              };
+            }
+          }
+        });
+
+        const list = Object.values(map);
+        if (!khataSearch) return list;
+        const q = khataSearch.toLowerCase();
+        return list.filter(c => c.name.toLowerCase().includes(q) || c.phone.includes(q));
+      }, [khataEntries, bills, khataSearch, isUrdu]);
+
+      const totalPendingUdhaar = useMemo(() => {
+        return customerKhataSummary.reduce((sum, c) => sum + Math.max(0, c.udhaarBalance), 0);
+      }, [customerKhataSummary]);
+
+      // --- Record Khata Payment (Pay Wasooli) ---
+      const handleRecordPayment = async (e) => {
+        e.preventDefault();
+        const amt = Number(paymentAmount);
+        if (!amt || amt <= 0 || !paymentModalCustomer) return;
+
+        const db = await initDatabase();
+        const entry = {
+          id: Date.now(),
+          customerPhone: paymentModalCustomer.phone,
+          customerName: paymentModalCustomer.name,
+          date: new Date().toISOString().slice(0, 10),
+          type: 'payment',
+          amount: amt,
+          note: paymentNote.trim() || (isUrdu ? 'نقد وصولی' : 'Cash Received')
+        };
+
+        await db.put('khata', entry);
+        setKhataEntries(prev => [...prev, entry]);
+        setPaymentModalCustomer(null);
+        setPaymentAmount('');
+        setPaymentNote('');
+      };
+
+      // --- Data Manager: Export Backup JSON ---
+      const handleExportBackup = async () => {
+        const db = await initDatabase();
+        const allProducts = await db.getAll('products');
+        const allBills = await db.getAll('bills');
+        const allKhata = await db.getAll('khata');
+
+        const backupData = {
+          version: '2.0',
+          appName: 'Dukaan Digital Kit',
+          exportDate: new Date().toISOString(),
+          shop,
+          pin: pinCode,
+          products: allProducts,
+          bills: allBills,
+          khata: allKhata
+        };
+
+        const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `dukaan_backup_${new Date().toISOString().slice(0, 10)}.json`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      // --- Data Manager: Import Backup JSON ---
+      const handleImportBackup = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = async (event) => {
+          try {
+            const data = JSON.parse(event.target.result);
+            if (!data.products && !data.bills) {
+              alert(isUrdu ? 'غلط بیک اپ فائل!' : 'Invalid backup JSON file format');
+              return;
+            }
+
+            const confirmMsg = isUrdu 
+              ? `کیا آپ یہ بیک اپ بحال کرنا چاہتے ہیں؟ (${data.products?.length || 0} پراڈکٹس، ${data.bills?.length || 0} بلز)` 
+              : `Restore backup? (${data.products?.length || 0} products, ${data.bills?.length || 0} bills)`;
+
+            if (window.confirm(confirmMsg)) {
+              const db = await initDatabase();
+              
+              if (data.products && data.products.length > 0) {
+                const txP = db.transaction('products', 'readwrite');
+                await txP.store.clear();
+                for (const p of data.products) await txP.store.put(p);
+                await txP.done;
+                setProducts(data.products);
+              }
+
+              if (data.bills && data.bills.length > 0) {
+                const txB = db.transaction('bills', 'readwrite');
+                await txB.store.clear();
+                for (const b of data.bills) await txB.store.put(b);
+                await txB.done;
+                setBills(data.bills);
+              }
+
+              if (data.khata) {
+                const txK = db.transaction('khata', 'readwrite');
+                await txK.store.clear();
+                for (const k of data.khata) await txK.store.put(k);
+                await txK.done;
+                setKhataEntries(data.khata);
+              }
+
+              if (data.shop) setShop(data.shop);
+              if (data.pin !== undefined) {
+                setPinCode(data.pin);
+                localStorage.setItem('ddk_pin', data.pin);
+              }
+
+              alert(isUrdu ? 'بیک اپ کامیابی سے بحال ہو گیا ہے! ✓' : 'Backup restored successfully! ✓');
+            }
+          } catch (err) {
+            alert(isUrdu ? 'فائل پڑھنے میں غلطی' : 'Failed to parse JSON file');
+          }
+        };
+        reader.readAsText(file);
+      };
+
+      // --- Data Manager: Export CSV (Excel compatible with UTF-8 BOM) ---
+      const handleExportProductsCSV = () => {
+        const headers = ["ID", "Fabric Name", "Category", "Price (PKR)", "Stock Qty", "Inventory Value (PKR)"];
+        const rows = products.map(p => [
+          p.id,
+          `"${(p.name || '').replace(/"/g, '""')}"`,
+          `"${p.category}"`,
+          p.price,
+          p.stock,
+          p.price * p.stock
+        ]);
+        const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `dukaan_products_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      const handleExportSalesCSV = () => {
+        const headers = ["Bill No", "Date", "Customer Name", "Customer Phone", "Items Count", "Subtotal", "Discount", "Grand Total", "Paid Amount", "Udhaar"];
+        const rows = bills.map(b => [
+          b.billNo,
+          b.date,
+          `"${(b.customerName || '').replace(/"/g, '""')}"`,
+          `"${b.customerPhone || ''}"`,
+          b.items.reduce((s, i) => s + i.qty, 0),
+          b.subtotal,
+          b.discount,
+          b.grandTotal,
+          b.paidAmount,
+          b.udhaarAmount
+        ]);
+        const csvContent = "\uFEFF" + [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `dukaan_sales_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(url);
+      };
+
+      // --- Clear Demo Data (Feature 8) ---
+      const handleClearDemoData = async () => {
+        const confirmMsg = isUrdu 
+          ? "کیا آپ تمام ڈیمو پراڈکٹس، سیلز اور کھاتہ صاف کرنا چاہتے ہیں؟ آپ کا اسٹاک خالی ہو جائے گا۔"
+          : "Are you sure you want to clear all demo data (products, sales bills, khata)? Your store will be empty and ready for fresh entries.";
+        if (window.confirm(confirmMsg)) {
+          const db = await initDatabase();
+          await db.clear('products');
+          await db.clear('bills');
+          await db.clear('khata');
+          setProducts([]);
+          setBills([]);
+          setKhataEntries([]);
+          alert(isUrdu ? "تمام ڈیمو ڈیٹا صاف کر دیا گیا۔" : "All demo data has been cleared.");
+        }
+      };
+
+      // --- Reload Demo Data Helper ---
+      const handleReloadDemoData = async () => {
+        const db = await initDatabase();
+        const txP = db.transaction('products', 'readwrite');
+        for (const p of DEMO_PRODUCTS) await txP.store.put(p);
+        await txP.done;
+        setProducts(DEMO_PRODUCTS);
+
+        const txB = db.transaction('bills', 'readwrite');
+        for (const b of DEMO_BILLS) await txB.store.put(b);
+        await txB.done;
+        setBills(DEMO_BILLS);
+
+        const txK = db.transaction('khata', 'readwrite');
+        for (const k of DEMO_KHATA) await txK.store.put(k);
+        await txK.done;
+        setKhataEntries(DEMO_KHATA);
+
+        alert(isUrdu ? "ڈیمو ڈیٹا دوبارہ لوڈ ہو گیا!" : "Demo fabrics & records reloaded!");
+      };
+
+      // --- Render 4-Digit PIN Lock Screen ---
+      if (isLocked) {
+        return (
+          <div className={`min-h-screen flex flex-col items-center justify-center p-6 bg-emerald-950 text-white select-none ${isUrdu ? 'urdu-font rtl' : 'ltr'}`} dir={isUrdu ? 'rtl' : 'ltr'}>
+            <div className="w-full max-w-xs space-y-6 text-center">
+              {/* Shop Logo / Icon */}
+              <div className="mx-auto w-20 h-20 rounded-3xl bg-emerald-900/80 border-2 border-amber-400/50 flex items-center justify-center shadow-lg shadow-black/40">
+                {shop.logo ? (
+                  <img src={shop.logo} className="w-full h-full object-cover rounded-3xl" />
+                ) : (
+                  <span className="text-4xl">🔐</span>
+                )}
+              </div>
+
+              <div>
+                <h1 className="text-xl font-bold text-amber-300">{shop.name}</h1>
+                <p className="text-xs text-emerald-300/80 mt-1">
+                  {isUrdu ? "دکان ڈیجیٹل کٹ لاک ہے • 4 ہندسوں کا پن درج کریں" : "Dukaan Locked • Enter 4-Digit PIN"}
+                </p>
+              </div>
+
+              {/* 4 Digit Indicators */}
+              <div className="flex justify-center items-center gap-4 py-2">
+                {[0, 1, 2, 3].map(i => (
+                  <div 
+                    key={i} 
+                    className={`w-4 h-4 rounded-full transition-all duration-200 ${
+                      enteredPin.length > i 
+                        ? 'bg-amber-400 scale-125 shadow-md shadow-amber-400/50' 
+                        : 'border-2 border-emerald-600 bg-transparent'
+                    }`} 
+                  />
+                ))}
+              </div>
+
+              {pinError && (
+                <p className="text-xs text-red-400 font-semibold animate-pulse">{pinError}</p>
+              )}
+
+              {/* Keypad */}
+              <div className="grid grid-cols-3 gap-3 pt-2">
+                {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map(num => (
+                  <button
+                    key={num}
+                    onClick={() => handlePinPress(num)}
+                    className="h-16 rounded-2xl bg-emerald-900/60 hover:bg-emerald-800 active:scale-95 text-2xl font-bold border border-emerald-700/40 text-white transition-all shadow-sm flex items-center justify-center"
+                  >
+                    {num}
+                  </button>
+                ))}
+                <button
+                  onClick={handlePinBackspace}
+                  className="h-16 rounded-2xl bg-emerald-900/30 hover:bg-emerald-900/50 text-xl text-amber-300 active:scale-95 flex items-center justify-center"
+                  title="Clear"
+                >
+                  ⌫
+                </button>
+                <button
+                  onClick={() => handlePinPress('0')}
+                  className="h-16 rounded-2xl bg-emerald-900/60 hover:bg-emerald-800 active:scale-95 text-2xl font-bold border border-emerald-700/40 text-white transition-all shadow-sm flex items-center justify-center"
+                >
+                  0
+                </button>
+                <button
+                  onClick={() => {
+                    const confirmReset = window.confirm(
+                      isUrdu 
+                        ? "کیا آپ پن کوڈ بھول گئے ہیں؟ دکان مالک کے موبائل کی تصدیق سے پن ری سیٹ کریں؟" 
+                        : "Forgot PIN? Reset PIN code?"
+                    );
+                    if (confirmReset) {
+                      localStorage.removeItem('ddk_pin');
+                      setPinCode('');
+                      setIsLocked(false);
+                    }
+                  }}
+                  className="h-16 rounded-2xl bg-emerald-900/30 hover:bg-emerald-900/50 text-xs text-emerald-300/80 active:scale-95 flex items-center justify-center font-bold px-1"
+                >
+                  {isUrdu ? "ری سیٹ" : "Reset"}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className={`flex flex-col min-h-screen ${isUrdu ? 'urdu-font rtl' : 'ltr'}`} dir={isUrdu ? 'rtl' : 'ltr'}>
+          {/* Header */}
+          <header className="sticky top-0 z-40 bg-emerald-900 text-white shadow-md border-b border-emerald-800">
+            <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between">
+              <div className="flex items-center space-x-3 rtl:space-x-reverse">
+                {shop.logo ? (
+                  <img src={shop.logo} className="w-10 h-10 rounded-full object-cover border-2 border-amber-400" />
+                ) : (
+                  <div className="w-10 h-10 rounded-full bg-emerald-800 flex items-center justify-center font-bold text-amber-300 text-lg shadow-inner">
+                    🧵
+                  </div>
+                )}
+                <div>
+                  <h1 className="font-bold text-base sm:text-lg leading-tight flex items-center gap-1.5">
+                    <span>{shop.name}</span>
+                  </h1>
+                  <div className="flex items-center gap-2 text-[11px] text-emerald-200">
+                    <span>{isUrdu ? "دکان ڈیجیٹل کٹ" : "Dukaan Digital Kit"}</span>
+                    <span>•</span>
+                    {/* Online / Offline badge (Feature 5) */}
+                    <span className={`inline-flex items-center gap-1 px-1.5 py-0.2 rounded font-semibold text-[10px] ${
+                      isOnline ? 'bg-emerald-800 text-emerald-200' : 'bg-red-800 text-red-100 animate-pulse'
+                    }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${isOnline ? 'bg-green-400' : 'bg-red-400'}`} />
+                      {isOnline ? (isUrdu ? "آن لائن" : "Online") : (isUrdu ? "آف لائن موڈ" : "Offline Mode")}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-2 rtl:space-x-reverse">
+                {/* PWA Install Button (Feature 5) */}
+                {installPrompt && (
+                  <button 
+                    onClick={() => {
+                      installPrompt.prompt();
+                      installPrompt.userChoice.then(() => setInstallPrompt(null));
+                    }}
+                    className="px-2 py-1 text-xs font-bold rounded-lg bg-amber-500 hover:bg-amber-400 text-emerald-950 flex items-center gap-1 shadow-sm"
+                    title="Install App"
+                  >
+                    <span>📲</span>
+                    <span className="hidden sm:inline">{isUrdu ? "انسٹال کریں" : "Install"}</span>
+                  </button>
+                )}
+
+                {/* Language Toggle */}
+                <button 
+                  onClick={() => setLang(l => l === 'en' ? 'ur' : 'en')}
+                  className="px-2.5 py-1 text-xs font-bold rounded-lg bg-emerald-800 text-amber-300 border border-emerald-700 hover:bg-emerald-700"
+                >
+                  {isUrdu ? 'English' : 'اردو'}
+                </button>
+
+                {/* Dark Mode Toggle */}
+                <button 
+                  onClick={() => setDark(d => !d)}
+                  className="p-1.5 text-sm rounded-lg bg-emerald-800 hover:bg-emerald-700 text-amber-300"
+                  title="Toggle Dark Mode"
+                >
+                  {dark ? '☀️' : '🌙'}
+                </button>
+
+                {/* PIN Lock Trigger */}
+                {pinCode && (
+                  <button
+                    onClick={() => setIsLocked(true)}
+                    className="p-1.5 text-sm rounded-lg bg-emerald-800 hover:bg-emerald-700 text-amber-300"
+                    title="Lock App"
+                  >
+                    🔒
+                  </button>
+                )}
+              </div>
+            </div>
+          </header>
+
+          {/* Body Content */}
+          <main className="flex-1 max-w-4xl w-full mx-auto p-4 pb-28">
+
+            {/* TAB 1: Products Inventory */}
+            {tab === 'products' && (
+              <div>
+                {/* Search & Actions */}
+                <div className="space-y-3 mb-4">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder={isUrdu ? "کپڑا، برانڈ یا کیٹیگری تلاش کریں..." : "Search fabric, brand, category..."}
+                      value={search}
+                      onChange={e => setSearch(e.target.value)}
+                      className="flex-1 px-4 py-2.5 rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600 shadow-sm"
+                    />
+                    <button
+                      onClick={() => { setModalProduct(null); setShowProductModal(true); }}
+                      className="bg-emerald-900 hover:bg-emerald-800 text-white font-bold px-4 py-2.5 rounded-xl text-sm flex items-center gap-1.5 shadow-sm whitespace-nowrap"
+                    >
+                      <span className="text-base">+</span> {isUrdu ? "نیا کپڑا" : "Add Fabric"}
+                    </button>
+                  </div>
+
+                  {/* Categories */}
+                  <div className="flex overflow-x-auto gap-2 py-1 scrollbar-none">
+                    {['All', 'Wash & Wear', 'Cotton', 'Kurta', 'Ladies'].map(cat => (
+                      <button
+                        key={cat}
+                        onClick={() => setCategory(cat)}
+                        className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all ${
+                          category === cat 
+                            ? 'bg-emerald-900 text-white shadow-sm' 
+                            : 'bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 text-gray-700 dark:text-gray-300'
+                        }`}
+                      >
+                        {cat === 'All' ? (isUrdu ? 'تمام' : 'All') : cat}
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => setLowStockFilter(f => !f)}
+                      className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1 ${
+                        lowStockFilter 
+                          ? 'bg-red-600 text-white shadow-sm' 
+                          : 'bg-white dark:bg-zinc-900 border border-red-200 dark:border-red-900/60 text-red-600'
+                      }`}
+                    >
+                      ⚠️ {isUrdu ? `کم اسٹاک (<5)` : `Low Stock (<5)`}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Product Grid */}
+                {filteredProducts.length === 0 ? (
+                  <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-3xl border border-gray-200 dark:border-zinc-800 p-8 shadow-sm">
+                    <span className="text-5xl">🧵</span>
+                    <p className="mt-3 font-semibold text-gray-600 dark:text-gray-400">
+                      {isUrdu ? "کوئی کپڑا دستیاب نہیں ہے" : "No fabrics found"}
+                    </p>
+                    <button
+                      onClick={() => { setModalProduct(null); setShowProductModal(true); }}
+                      className="mt-4 px-4 py-2 bg-emerald-900 text-white rounded-xl text-xs font-bold"
+                    >
+                      + {isUrdu ? "پہلا سوٹ شامل کریں" : "Add First Product"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
+                    {filteredProducts.map(p => (
+                      <div key={p.id} className="bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200/80 dark:border-zinc-800/80 shadow-sm overflow-hidden flex flex-col justify-between hover:shadow-md transition-shadow">
+                        <div>
+                          <div className="relative h-36 bg-emerald-50 dark:bg-zinc-800 flex items-center justify-center overflow-hidden">
+                            {p.image ? (
+                              <img src={p.image} className="w-full h-full object-cover" alt={p.name} />
+                            ) : (
+                              <span className="text-4xl opacity-80">🧵</span>
+                            )}
+                            <span className="absolute top-2 left-2 rtl:left-auto rtl:right-2 text-[10px] font-bold bg-emerald-950/80 backdrop-blur-sm text-white px-2 py-0.5 rounded-full">
+                              {p.category}
+                            </span>
+                            <span className={`absolute top-2 right-2 rtl:right-auto rtl:left-2 text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                              p.stock < 5 ? 'bg-red-500 text-white animate-pulse' : 'bg-black/60 backdrop-blur-sm text-white'
+                            }`}>
+                              {p.stock} {isUrdu ? "سوٹ" : "left"}
+                            </span>
+                          </div>
+                          <div className="p-3">
+                            <h3 className="font-bold text-sm line-clamp-2 leading-snug">{p.name}</h3>
+                            <div className="mt-1 flex items-baseline justify-between">
+                              <span className="text-emerald-900 dark:text-emerald-400 font-extrabold text-base">
+                                Rs. {p.price}
+                              </span>
+                              <button 
+                                onClick={() => addToBill(p)}
+                                title={isUrdu ? "بل میں شامل کریں" : "Add to bill"}
+                                className="text-xs bg-emerald-100 dark:bg-emerald-950/70 text-emerald-900 dark:text-emerald-300 font-bold px-2 py-1 rounded-lg hover:bg-emerald-200 transition-colors"
+                              >
+                                +🧾 {isUrdu ? "بل" : "Bill"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="p-3 pt-0 space-y-2">
+                          {p.stock < 5 && (
+                            <button
+                              onClick={async () => {
+                                const db = await initDatabase();
+                                const updated = products.map(x => x.id === p.id ? {...x, stock: x.stock + 5} : x);
+                                const target = updated.find(x => x.id === p.id);
+                                await db.put('products', target);
+                                setProducts(updated);
+                              }}
+                              className="w-full py-1.5 px-2 bg-amber-500 hover:bg-amber-400 active:scale-95 text-emerald-950 rounded-xl text-xs font-bold flex items-center justify-center gap-1 shadow-sm transition-all"
+                              title={isUrdu ? "5 سوٹ فوری اسٹاک شامل کریں" : "+5 Restock"}
+                            >
+                              <span>⚡ +5</span>
+                              <span>{isUrdu ? "اسٹاک شامل کریں" : "Quick Restock"}</span>
+                            </button>
+                          )}
+                          <a
+                            href={getWhatsAppLink(p)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full py-2 px-2 bg-[#25D366] hover:bg-[#1EBE5D] text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm transition-colors"
+                          >
+                            <span>💬</span>
+                            <span>{isUrdu ? "واٹس ایپ آرڈر" : "WhatsApp Order"}</span>
+                          </a>
+                          <div className="flex justify-between items-center text-xs text-gray-400 pt-1 border-t dark:border-zinc-800">
+                            <button 
+                              onClick={() => { setModalProduct(p); setShowProductModal(true); }}
+                              className="hover:text-emerald-600 font-semibold"
+                            >
+                              ✏️ {isUrdu ? "تبدیل" : "Edit"}
+                            </button>
+                            <button 
+                              onClick={async () => {
+                                if (window.confirm(isUrdu ? "کیا آپ واقعی یہ کپڑا ڈیلیٹ کرنا چاہتے ہیں؟" : "Delete this product?")) {
+                                  const db = await initDatabase();
+                                  await db.delete('products', p.id);
+                                  setProducts(all => all.filter(x => x.id !== p.id));
+                                }
+                              }}
+                              className="hover:text-red-500 font-semibold"
+                            >
+                              🗑️ {isUrdu ? "ختم" : "Delete"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 2: Billing & Thermal/A4 Invoicing */}
+            {tab === 'billing' && (
+              <div className="space-y-4">
+                {/* Print Format Toggle (Feature 7) */}
+                <div className="flex items-center justify-between bg-white dark:bg-zinc-900 p-3 rounded-2xl border border-gray-200 dark:border-zinc-800">
+                  <span className="text-xs font-bold text-gray-500">
+                    {isUrdu ? "پرنٹ فارمیٹ:" : "Print Format:"}
+                  </span>
+                  <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl">
+                    <button
+                      onClick={() => setReceiptType('thermal')}
+                      className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                        receiptType === 'thermal' 
+                          ? 'bg-emerald-900 text-white shadow-sm' 
+                          : 'text-gray-500 hover:text-black dark:hover:text-white'
+                      }`}
+                    >
+                      🧾 80mm {isUrdu ? "تھرمل رسید" : "Thermal"}
+                    </button>
+                    <button
+                      onClick={() => setReceiptType('a4')}
+                      className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                        receiptType === 'a4' 
+                          ? 'bg-emerald-900 text-white shadow-sm' 
+                          : 'text-gray-500 hover:text-black dark:hover:text-white'
+                      }`}
+                    >
+                      📄 A4 {isUrdu ? "معیاری انوائس" : "Invoice"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* The Bill Canvas / Form */}
+                <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm space-y-4">
+                  <div className="text-center border-b pb-3 dark:border-zinc-800">
+                    <h2 className="text-xl font-bold text-emerald-900 dark:text-emerald-400">{shop.name}</h2>
+                    <p className="text-xs text-gray-500 mt-0.5">{shop.owner} • 📞 {shop.phone}</p>
+                    <p className="text-xs text-gray-400">📍 {shop.address}</p>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block text-gray-500 mb-1 font-semibold">{isUrdu ? "گاہک کا نام:" : "Customer Name:"}</label>
+                      <input 
+                        type="text" 
+                        placeholder={isUrdu ? "عام گاہک" : "Customer Name"}
+                        value={customerName}
+                        onChange={e => setCustomerName(e.target.value)}
+                        className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm focus:ring-1 focus:ring-emerald-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 mb-1 font-semibold">{isUrdu ? "موبائل فون نمبر:" : "Phone #:"}</label>
+                      <input 
+                        type="tel" 
+                        placeholder="03001234567"
+                        value={customerPhone}
+                        onChange={e => setCustomerPhone(e.target.value)}
+                        className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm focus:ring-1 focus:ring-emerald-600"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Items in Current Bill */}
+                  <div>
+                    <h3 className="text-xs font-bold text-gray-500 mb-2">{isUrdu ? "بل کے آئٹمز:" : "Bill Items:"}</h3>
+                    {billItems.length === 0 ? (
+                      <div className="text-center py-6 border border-dashed rounded-xl dark:border-zinc-800 text-gray-400 text-xs">
+                        {isUrdu ? "نیچے دیے گئے اسٹاک سے کپڑے پر کلک کر کے شامل کریں" : "Click fabrics from below to add to bill"}
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {billItems.map(item => (
+                          <div key={item.id} className="flex items-center justify-between text-xs p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border dark:border-zinc-800">
+                            <div className="flex-1 pr-2">
+                              <p className="font-bold leading-tight">{item.name}</p>
+                              <p className="text-gray-500 mt-0.5">Rs. {item.price} × {item.qty} = <span className="font-bold text-emerald-800 dark:text-emerald-400">Rs. {item.price * item.qty}</span></p>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button 
+                                onClick={() => setBillItems(b => b.map(x => x.id === item.id ? {...x, qty: Math.max(1, x.qty - 1)} : x))}
+                                className="w-7 h-7 rounded-lg bg-gray-200 dark:bg-zinc-700 font-bold hover:bg-gray-300"
+                              >-</button>
+                              <span className="w-6 text-center font-bold">{item.qty}</span>
+                              <button 
+                                onClick={() => setBillItems(b => b.map(x => x.id === item.id ? {...x, qty: x.qty + 1} : x))}
+                                className="w-7 h-7 rounded-lg bg-gray-200 dark:bg-zinc-700 font-bold hover:bg-gray-300"
+                              >+</button>
+                              <button 
+                                onClick={() => setBillItems(b => b.filter(x => x.id !== item.id))}
+                                className="text-red-500 hover:text-red-700 px-1.5 font-bold"
+                              >✕</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Calculations & Payments */}
+                  <div className="border-t pt-3 space-y-2 text-sm dark:border-zinc-800">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">{isUrdu ? "کل رقم (سب ٹوٹل):" : "Subtotal:"}</span>
+                      <span className="font-semibold">Rs. {subtotal}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-500">{isUrdu ? "رعایت / ڈسکاؤنٹ:" : "Discount (PKR):"}</span>
+                      <input 
+                        type="number" 
+                        value={discount || ''}
+                        onChange={e => setDiscount(e.target.value)}
+                        placeholder="0"
+                        className="w-24 p-1.5 text-right rounded-lg border dark:border-zinc-700 bg-transparent text-sm font-semibold text-red-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="flex justify-between font-bold text-base text-emerald-950 dark:text-emerald-300 border-t pt-2 dark:border-zinc-800">
+                      <span>{isUrdu ? "حتمی بل ٹوٹل:" : "Grand Total:"}</span>
+                      <span>Rs. {grandTotal}</span>
+                    </div>
+
+                    {/* Paid & Udhaar balance inputs */}
+                    <div className="grid grid-cols-2 gap-3 pt-2 bg-emerald-50/50 dark:bg-emerald-950/20 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
+                      <div>
+                        <label className="block text-[11px] text-gray-500 font-semibold mb-1">
+                          {isUrdu ? "وصول شدہ نقد رقم:" : "Cash Paid:"}
+                        </label>
+                        <input 
+                          type="number"
+                          placeholder={`Rs. ${grandTotal}`}
+                          value={paidAmountInput}
+                          onChange={e => setPaidAmountInput(e.target.value)}
+                          className="w-full p-2 rounded-lg border dark:border-zinc-700 bg-white dark:bg-zinc-900 text-sm font-bold text-emerald-800 dark:text-emerald-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-gray-500 font-semibold mb-1">
+                          {isUrdu ? "بقایا ادھار کھاتہ:" : "Udhaar (Credit):"}
+                        </label>
+                        <div className={`p-2 rounded-lg font-bold text-sm ${udhaarBalance > 0 ? 'bg-red-100 dark:bg-red-950/50 text-red-600' : 'bg-green-100 dark:bg-green-950/50 text-green-700'}`}>
+                          Rs. {udhaarBalance}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Print & Share Actions */}
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleSaveAndPrintBill}
+                    disabled={billItems.length === 0}
+                    className="flex-1 py-3 bg-emerald-900 hover:bg-emerald-800 disabled:opacity-50 text-white font-bold rounded-xl text-sm flex items-center justify-center gap-2 shadow-sm transition-all"
+                  >
+                    <span>🖨️</span>
+                    <span>{isUrdu ? `محفوظ اور پرنٹ کریں (${receiptType === 'thermal' ? '80mm' : 'A4'})` : `Save & Print (${receiptType === 'thermal' ? '80mm' : 'A4'})`}</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      const msg = `🛍️ *${shop.name}*\n${isUrdu ? 'گاہک' : 'Customer'}: ${customerName || 'Walk-in'}\n${isUrdu ? 'کل رقم' : 'Total'}: Rs. ${grandTotal} PKR\n${isUrdu ? 'ادا شدہ' : 'Paid'}: Rs. ${actualPaid} PKR\n${udhaarBalance > 0 ? `${isUrdu ? 'بقایا ادھار' : 'Udhaar'}: Rs. ${udhaarBalance} PKR\n` : ''}${isUrdu ? 'شکریہ!' : 'Thank you for shopping!'}`;
+                      const cleanPhone = (customerPhone || '').replace(/[^0-9]/g, '');
+                      const targetPhone = cleanPhone.startsWith('03') ? '92' + cleanPhone.slice(1) : (cleanPhone.startsWith('92') ? cleanPhone : '');
+                      const waUrl = targetPhone ? `https://wa.me/${targetPhone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+                      window.open(waUrl);
+                    }}
+                    disabled={billItems.length === 0}
+                    className="py-3 px-4 bg-[#25D366] hover:bg-[#1EBE5D] disabled:opacity-50 text-white font-bold rounded-xl text-sm flex items-center justify-center gap-2 shadow-sm"
+                  >
+                    <span>💬</span>
+                    <span>{isUrdu ? "واٹس ایپ" : "WhatsApp"}</span>
+                  </button>
+                </div>
+
+                {/* Quick Add items from Inventory */}
+                <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-gray-200 dark:border-zinc-800">
+                  <h4 className="text-xs font-bold text-gray-500 mb-2">{isUrdu ? "اسٹاک سے فوری شامل کریں:" : "Quick Add from Inventory:"}</h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {products.map(p => (
+                      <button
+                        key={p.id}
+                        onClick={() => addToBill(p)}
+                        className="text-left rtl:text-right p-2 rounded-xl border dark:border-zinc-800 hover:border-emerald-600 dark:hover:border-emerald-500 bg-zinc-50 dark:bg-zinc-800/40 text-xs transition-colors"
+                      >
+                        <p className="font-bold line-clamp-1">{p.name}</p>
+                        <div className="flex justify-between text-[11px] text-gray-500 mt-1">
+                          <span className="text-emerald-800 dark:text-emerald-400 font-bold">Rs. {p.price}</span>
+                          <span>{p.stock} {isUrdu ? "سوٹ" : "in stock"}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: Sales History (Feature 3) */}
+            {tab === 'sales' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-base font-bold text-emerald-950 dark:text-emerald-400">
+                    {isUrdu ? "سیلز ہسٹری اور بلز" : "Sales History & Bills"}
+                  </h2>
+                  <button 
+                    onClick={handleExportSalesCSV}
+                    className="text-xs px-3 py-1.5 bg-emerald-800 text-white font-bold rounded-xl hover:bg-emerald-700 shadow-sm"
+                  >
+                    📥 {isUrdu ? "ایکسل CSV ڈاؤن لوڈ" : "Export Sales CSV"}
+                  </button>
+                </div>
+
+                {/* Sales Search */}
+                <input
+                  type="text"
+                  placeholder={isUrdu ? "بل نمبر، گاہک کا نام یا فون نمبر تلاش کریں..." : "Search by Bill #, Customer name or phone..."}
+                  value={salesSearch}
+                  onChange={e => setSalesSearch(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600"
+                />
+
+                {/* Summary bar */}
+                <div className="grid grid-cols-3 gap-2">
+                  <div className="p-3 bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-800 text-center">
+                    <p className="text-[11px] text-gray-500">{isUrdu ? "کل بلز" : "Total Bills"}</p>
+                    <p className="text-lg font-bold text-emerald-900 dark:text-emerald-400">{bills.length}</p>
+                  </div>
+                  <div className="p-3 bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-800 text-center">
+                    <p className="text-[11px] text-gray-500">{isUrdu ? "کل سیلز" : "Total Revenue"}</p>
+                    <p className="text-lg font-bold text-amber-600">Rs. {bills.reduce((s,b)=>s+b.grandTotal,0)}</p>
+                  </div>
+                  <div className="p-3 bg-white dark:bg-zinc-900 rounded-xl border border-gray-200 dark:border-zinc-800 text-center">
+                    <p className="text-[11px] text-gray-500">{isUrdu ? "کل ادھار" : "Total Credit"}</p>
+                    <p className="text-lg font-bold text-red-600">Rs. {bills.reduce((s,b)=>s+b.udhaarAmount,0)}</p>
+                  </div>
+                </div>
+
+                {/* Bills List */}
+                {bills.length === 0 ? (
+                  <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-3xl p-6 text-gray-500 border dark:border-zinc-800">
+                    <span className="text-4xl">📜</span>
+                    <p className="mt-2 text-sm">{isUrdu ? "ابھی تک کوئی بل موجود نہیں" : "No sales bills recorded yet"}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {bills
+                      .filter(b => {
+                        if (!salesSearch) return true;
+                        const q = salesSearch.toLowerCase();
+                        return (b.billNo && b.billNo.toLowerCase().includes(q)) ||
+                               (b.customerName && b.customerName.toLowerCase().includes(q)) ||
+                               (b.customerPhone && b.customerPhone.includes(q));
+                      })
+                      .map(bill => (
+                        <div key={bill.id} className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm hover:shadow transition-all space-y-2">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <span className="text-xs font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 px-2 py-0.5 rounded-md">
+                                {bill.billNo || `#${bill.id}`}
+                              </span>
+                              <h3 className="font-bold text-sm mt-1">{bill.customerName}</h3>
+                              <p className="text-xs text-gray-500">📞 {bill.customerPhone} • 📅 {bill.date} {bill.time && `• ${bill.time}`}</p>
+                            </div>
+                            <div className="text-right rtl:text-left">
+                              <p className="text-base font-extrabold text-emerald-900 dark:text-emerald-400">Rs. {bill.grandTotal}</p>
+                              {bill.udhaarAmount > 0 ? (
+                                <span className="text-[10px] bg-red-100 text-red-700 dark:bg-red-950/70 dark:text-red-300 px-2 py-0.5 rounded-full font-bold">
+                                  {isUrdu ? `ادھار: Rs. ${bill.udhaarAmount}` : `Udhaar: Rs. ${bill.udhaarAmount}`}
+                                </span>
+                              ) : (
+                                <span className="text-[10px] bg-green-100 text-green-700 dark:bg-green-950/70 dark:text-green-300 px-2 py-0.5 rounded-full font-bold">
+                                  {isUrdu ? "مکمل ادا" : "Fully Paid"}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          <div className="text-xs text-gray-600 dark:text-gray-400 bg-zinc-50 dark:bg-zinc-800/50 p-2 rounded-xl">
+                            {bill.items.map((it, idx) => (
+                              <span key={idx} className="mr-2 rtl:mr-0 rtl:ml-2">
+                                • {it.name} ({it.qty} {isUrdu ? "سوٹ" : "x"})
+                              </span>
+                            ))}
+                          </div>
+
+                          {/* Bill Action Buttons */}
+                          <div className="flex justify-between items-center pt-2 border-t dark:border-zinc-800 text-xs">
+                            <button
+                              onClick={() => {
+                                setActivePrintBill(bill);
+                                setTimeout(() => window.print(), 100);
+                              }}
+                              className="px-3 py-1.5 bg-emerald-900 text-white rounded-lg font-bold flex items-center gap-1 hover:bg-emerald-800"
+                            >
+                              <span>🖨️</span> {isUrdu ? "پرنٹ کریں" : "Re-Print"}
+                            </button>
+
+                            <button
+                              onClick={() => {
+                                const msg = `🛍️ *${shop.name}*\n${isUrdu ? 'بل نمبر' : 'Bill'}: ${bill.billNo}\n${isUrdu ? 'گاہک' : 'Customer'}: ${bill.customerName}\n${isUrdu ? 'کل رقم' : 'Grand Total'}: Rs. ${bill.grandTotal}\n${bill.udhaarAmount > 0 ? `${isUrdu ? 'بقایا ادھار' : 'Pending Udhaar'}: Rs. ${bill.udhaarAmount}` : `${isUrdu ? 'ادا شدہ' : 'Paid'}`}`;
+                                const cleanPhone = (bill.customerPhone || '').replace(/[^0-9]/g, '');
+                                const targetPhone = cleanPhone.startsWith('03') ? '92' + cleanPhone.slice(1) : (cleanPhone.startsWith('92') ? cleanPhone : '');
+                                const waUrl = targetPhone ? `https://wa.me/${targetPhone}?text=${encodeURIComponent(msg)}` : `https://wa.me/?text=${encodeURIComponent(msg)}`;
+                                window.open(waUrl);
+                              }}
+                              className="px-3 py-1.5 bg-[#25D366] text-white rounded-lg font-bold flex items-center gap-1 hover:bg-[#1EBE5D]"
+                            >
+                              <span>💬</span> {isUrdu ? "واٹس ایپ" : "WhatsApp"}
+                            </button>
+
+                            <button
+                              onClick={async () => {
+                                if (window.confirm(isUrdu ? "کیا آپ یہ بل ڈیلیٹ کرنا چاہتے ہیں؟" : "Delete this bill?")) {
+                                  const db = await initDatabase();
+                                  await db.delete('bills', bill.id);
+                                  setBills(all => all.filter(x => x.id !== bill.id));
+                                }
+                              }}
+                              className="text-red-500 hover:text-red-700 px-2 py-1 font-semibold"
+                            >
+                              🗑️ {isUrdu ? "ڈیلیٹ" : "Delete"}
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 4: Customers Khata (Feature 3) */}
+            {tab === 'khata' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-base font-bold text-emerald-950 dark:text-emerald-400">
+                    {isUrdu ? "گاہک کھاتہ رجسٹر (ادھار / وصولی)" : "Customers Khata (Udhaar / Ledger)"}
+                  </h2>
+                </div>
+
+                {/* Khata Summary Cards */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-4 bg-red-50 dark:bg-red-950/30 rounded-2xl border border-red-200 dark:border-red-900/50">
+                    <p className="text-xs text-red-600 dark:text-red-400 font-semibold">
+                      {isUrdu ? "مارکیٹ میں کل بقایا ادھار" : "Total Outstanding Udhaar"}
+                    </p>
+                    <p className="text-2xl font-extrabold text-red-700 dark:text-red-400 mt-1">
+                      Rs. {totalPendingUdhaar}
+                    </p>
+                  </div>
+                  <div className="p-4 bg-white dark:bg-zinc-900 rounded-2xl border border-gray-200 dark:border-zinc-800">
+                    <p className="text-xs text-gray-500 font-semibold">
+                      {isUrdu ? "کل کھاتہ دار گاہک" : "Total Khata Customers"}
+                    </p>
+                    <p className="text-2xl font-extrabold text-emerald-900 dark:text-emerald-400 mt-1">
+                      {customerKhataSummary.length}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Khata Search */}
+                <input
+                  type="text"
+                  placeholder={isUrdu ? "موبائل فون نمبر یا گاہک کا نام تلاش کریں..." : "Search by customer phone or name..."}
+                  value={khataSearch}
+                  onChange={e => setKhataSearch(e.target.value)}
+                  className="w-full px-4 py-2.5 rounded-xl border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-600 shadow-sm"
+                />
+
+                {/* Customer Khata Cards */}
+                {customerKhataSummary.length === 0 ? (
+                  <div className="text-center py-16 bg-white dark:bg-zinc-900 rounded-3xl p-6 border dark:border-zinc-800 text-gray-500">
+                    <span className="text-4xl">📒</span>
+                    <p className="mt-2 text-sm">{isUrdu ? "کوئی کھاتہ ریکارڈ موجود نہیں" : "No khata customers found"}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {customerKhataSummary.map(cust => (
+                      <div key={cust.phone} className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <h3 className="font-bold text-base leading-snug">{cust.name}</h3>
+                            <p className="text-xs text-gray-500 mt-0.5">📞 {cust.phone}</p>
+                          </div>
+                          <div className="text-right rtl:text-left">
+                            <p className="text-xs text-gray-400">{isUrdu ? "بقایا ادھار:" : "Udhaar Balance:"}</p>
+                            <span className={`text-lg font-extrabold ${cust.udhaarBalance > 0 ? 'text-red-600 dark:text-red-400' : 'text-emerald-600'}`}>
+                              Rs. {cust.udhaarBalance}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 text-xs bg-zinc-50 dark:bg-zinc-800/40 p-2.5 rounded-xl">
+                          <div>
+                            <span className="text-gray-400">{isUrdu ? "کل خریداری:" : "Total Purchase:"} </span>
+                            <span className="font-semibold">Rs. {cust.totalPurchases}</span>
+                          </div>
+                          <div>
+                            <span className="text-gray-400">{isUrdu ? "کل وصولی ادا:" : "Total Paid:"} </span>
+                            <span className="font-semibold text-emerald-600">Rs. {cust.totalPaid}</span>
+                          </div>
+                        </div>
+
+                        {/* Action Buttons */}
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setPaymentModalCustomer(cust);
+                              setPaymentAmount('');
+                            }}
+                            className="flex-1 py-2 bg-emerald-900 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1 shadow-sm"
+                          >
+                            <span>💳</span>
+                            <span>{isUrdu ? "وصولی درج کریں (Pay)" : "Record Payment (Pay)"}</span>
+                          </button>
+
+                          <button
+                            onClick={() => setViewLedgerCustomer(cust)}
+                            className="px-3 py-2 border border-gray-300 dark:border-zinc-700 rounded-xl text-xs font-bold hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                          >
+                            📜 {isUrdu ? "کھاتہ تفصیل" : "Ledger"}
+                          </button>
+
+                          {cust.udhaarBalance > 0 && (
+                            <a
+                              href={`https://wa.me/${cust.phone.replace(/[^0-9]/g, '').startsWith('03') ? '92' + cust.phone.replace(/[^0-9]/g, '').slice(1) : cust.phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                                isUrdu 
+                                  ? `السلام علیکم جناب ${cust.name}، ${shop.name} کی طرف سے یاد دہانی کہ آپ کا بقایا کھاتہ ادھار Rs. ${cust.udhaarBalance} روپے واجب الادا ہے۔ برائے مہربانی تشریف لا کر کلیئر فرما دیں۔ شکریہ!`
+                                  : `Salam ${cust.name}, polite reminder that your pending balance at ${shop.name} is Rs. ${cust.udhaarBalance} PKR. Thank you!`
+                              )}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-2 bg-[#25D366] hover:bg-[#1EBE5D] text-white rounded-xl text-xs font-bold flex items-center justify-center shadow-sm"
+                              title="Send WhatsApp Reminder"
+                            >
+                              💬
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* TAB 5: Dashboard Overview */}
+            {tab === 'dashboard' && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm">
+                    <p className="text-xs text-gray-500 font-semibold">{isUrdu ? "کل ورائٹی" : "Total Products"}</p>
+                    <p className="text-2xl font-bold text-emerald-950 dark:text-emerald-400 mt-1">{products.length}</p>
+                  </div>
+                  <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm">
+                    <p className="text-xs text-gray-500 font-semibold">{isUrdu ? "کل سوٹ (اسٹاک)" : "Total Stock Units"}</p>
+                    <p className="text-2xl font-bold text-amber-600 mt-1">{products.reduce((a,b)=>a+b.stock,0)}</p>
+                  </div>
+                  <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm">
+                    <p className="text-xs text-gray-500 font-semibold">{isUrdu ? "اسٹاک کی کل مالیت" : "Inventory Value"}</p>
+                    <p className="text-lg font-bold text-emerald-700 mt-1">Rs. {products.reduce((a,b)=>a+(b.price*b.stock),0)}</p>
+                  </div>
+                  <div className={`p-4 rounded-2xl border shadow-sm ${lowStockCount > 0 ? 'bg-red-50 dark:bg-red-950/30 border-red-200 text-red-600' : 'bg-white dark:bg-zinc-900 border-gray-200 dark:border-zinc-800'}`}>
+                    <p className="text-xs font-semibold">{isUrdu ? "کم اسٹاک الرٹ (<5)" : "Low Stock Alert (<5)"}</p>
+                    <p className="text-2xl font-bold mt-1">{lowStockCount} {isUrdu ? "آئٹمز" : "items"}</p>
+                  </div>
+                </div>
+
+                {/* Low Stock List */}
+                <div className="bg-white dark:bg-zinc-900 p-4 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm">
+                  <h3 className="font-bold text-sm mb-3 flex items-center gap-1.5 text-red-600">
+                    <span>⚠️</span> {isUrdu ? "کم اسٹاک والے کپڑے (< 5 سوٹ)" : "Low Stock Fabrics (< 5 units)"}
+                  </h3>
+                  {products.filter(p => p.stock < 5).length === 0 ? (
+                    <p className="text-xs text-gray-400 py-3 text-center">{isUrdu ? "تمام سوٹوں کا اسٹاک تسلی بخش ہے ✓" : "All fabric stocks are healthy ✓"}</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {products.filter(p => p.stock < 5).map(p => (
+                        <div key={p.id} className="flex items-center justify-between p-2.5 rounded-xl bg-red-50/70 dark:bg-red-950/20 text-xs">
+                          <div>
+                            <p className="font-bold">{p.name}</p>
+                            <p className="text-red-500 font-semibold mt-0.5">{isUrdu ? `صرف ${p.stock} سوٹ باقی` : `Only ${p.stock} in stock`}</p>
+                          </div>
+                          <button
+                            onClick={async () => {
+                              const db = await initDatabase();
+                              const updated = products.map(x => x.id === p.id ? {...x, stock: x.stock + 5} : x);
+                              const target = updated.find(x => x.id === p.id);
+                              await db.put('products', target);
+                              setProducts(updated);
+                            }}
+                            className="px-3 py-1.5 bg-emerald-900 text-white rounded-lg font-bold text-xs hover:bg-emerald-800 shadow-sm"
+                          >
+                            +5 {isUrdu ? "شامل کریں" : "Restock"}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 6: Settings, Security, & Data Manager (Features 4, 6, 8) */}
+            {tab === 'settings' && (
+              <div className="space-y-4">
+                {/* Shop Settings */}
+                <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-gray-200 dark:border-zinc-800 space-y-4 shadow-sm">
+                  <h3 className="font-bold text-base text-emerald-950 dark:text-emerald-400">
+                    {isUrdu ? "دکان پروفائل سیٹنگز" : "Shop Profile Settings"}
+                  </h3>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "دکان کا نام:" : "Shop Name:"}</label>
+                      <input 
+                        type="text" 
+                        value={shop.name} 
+                        onChange={e => setShop({...shop, name: e.target.value})}
+                        className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "مالک کا نام:" : "Owner Name:"}</label>
+                      <input 
+                        type="text" 
+                        value={shop.owner} 
+                        onChange={e => setShop({...shop, owner: e.target.value})}
+                        className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "واٹس ایپ فون نمبر:" : "WhatsApp Phone #:"}</label>
+                      <input 
+                        type="text" 
+                        value={shop.phone} 
+                        onChange={e => setShop({...shop, phone: e.target.value})}
+                        className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "مارکیٹ / پتہ:" : "Address / Market:"}</label>
+                      <input 
+                        type="text" 
+                        value={shop.address} 
+                        onChange={e => setShop({...shop, address: e.target.value})}
+                        className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Logo Upload with Canvas WebP compression */}
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "دکان کا لوگو (500px WebP کمپریس):" : "Shop Logo (Auto 500px WebP):"}</label>
+                    <input 
+                      type="file" 
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                          try {
+                            const compressed = await compressImageToWebP(file);
+                            setShop(prev => ({ ...prev, logo: compressed }));
+                          } catch (err) {
+                            alert('Failed to compress image');
+                          }
+                        }
+                      }}
+                      className="text-xs"
+                    />
+                  </div>
+                </div>
+
+                {/* Security / 4-Digit PIN (Feature 6) */}
+                <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm space-y-3">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h3 className="font-bold text-base text-emerald-950 dark:text-emerald-400">
+                        {isUrdu ? "سیکیورٹی لاک (4 ہندسوں کا پن کوڈ)" : "App Security PIN Lock"}
+                      </h3>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        {pinCode ? (isUrdu ? "پن کوڈ فعال ہے ✓" : "PIN lock is active ✓") : (isUrdu ? "کوئی پن کوڈ نہیں لگا ہوا" : "No PIN configured")}
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setShowPinSetupModal(true)}
+                      className="px-4 py-2 bg-emerald-900 text-white text-xs font-bold rounded-xl hover:bg-emerald-800"
+                    >
+                      {pinCode ? (isUrdu ? "پن تبدیل / ختم کریں" : "Change / Remove PIN") : (isUrdu ? "نیا پن بنائیں" : "Set 4-Digit PIN")}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Data Manager (Feature 4) */}
+                <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-gray-200 dark:border-zinc-800 shadow-sm space-y-4">
+                  <div>
+                    <h3 className="font-bold text-base text-emerald-950 dark:text-emerald-400">
+                      {isUrdu ? "ڈیٹا منیجر (بیک اپ اور ایکسل برآمد)" : "Data Manager (Backup & Excel Export)"}
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {isUrdu ? "تمام ریکارڈز آپ کے فون کے IndexedDB میں 100% محفوظ ہیں" : "All data is securely saved 100% offline in IndexedDB"}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      onClick={handleExportBackup}
+                      className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900 rounded-xl text-left rtl:text-right hover:bg-emerald-100 transition-colors"
+                    >
+                      <div className="font-bold text-xs text-emerald-900 dark:text-emerald-300">
+                        💾 {isUrdu ? "مکمل بیک اپ JSON ڈاؤن لوڈ کریں" : "Export Backup JSON"}
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        {isUrdu ? "پراڈکٹس، بلز، کھاتہ کی بیک اپ فائل محفوظ کریں" : "Save full database snapshot file"}
+                      </p>
+                    </button>
+
+                    <label className="p-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 rounded-xl text-left rtl:text-right hover:bg-blue-100 transition-colors cursor-pointer block">
+                      <div className="font-bold text-xs text-blue-900 dark:text-blue-300">
+                        📂 {isUrdu ? "بیک اپ JSON فائل بحال کریں" : "Import Backup JSON"}
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        {isUrdu ? "پہلے سے محفوظ شدہ بیک اپ لوڈ کریں" : "Restore from previously saved backup"}
+                      </p>
+                      <input type="file" accept=".json" onChange={handleImportBackup} className="hidden" />
+                    </label>
+
+                    <button
+                      onClick={handleExportProductsCSV}
+                      className="p-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded-xl text-left rtl:text-right hover:bg-amber-100 transition-colors"
+                    >
+                      <div className="font-bold text-xs text-amber-900 dark:text-amber-300">
+                        📊 {isUrdu ? "پراڈکٹس ایکسل CSV ڈاؤن لوڈ" : "Export Products CSV"}
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        {isUrdu ? "کپڑوں کے اسٹاک اور قیمتوں کی شیٹ" : "Download fabrics inventory spreadsheet"}
+                      </p>
+                    </button>
+
+                    <button
+                      onClick={handleExportSalesCSV}
+                      className="p-3 bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-900 rounded-xl text-left rtl:text-right hover:bg-purple-100 transition-colors"
+                    >
+                      <div className="font-bold text-xs text-purple-900 dark:text-purple-300">
+                        📈 {isUrdu ? "سیلز ہسٹری ایکسل CSV ڈاؤن لوڈ" : "Export Sales History CSV"}
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-0.5">
+                        {isUrdu ? "تمام بلز اور وصولیوں کا ایکسل ریکارڈ" : "Download sales and billing records"}
+                      </p>
+                    </button>
+                  </div>
+
+                  {/* Clear Demo Data (Feature 8) & Reload Data */}
+                  <div className="pt-4 border-t dark:border-zinc-800 flex flex-wrap gap-2 justify-between items-center">
+                    <button
+                      onClick={handleClearDemoData}
+                      className="px-3.5 py-2 text-xs font-bold bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 rounded-xl hover:bg-red-200 border border-red-200 dark:border-red-900 transition-colors"
+                    >
+                      🗑️ {isUrdu ? "ڈیمو ڈیٹا صاف کریں" : "Clear Demo Data"}
+                    </button>
+
+                    <button
+                      onClick={handleReloadDemoData}
+                      className="px-3.5 py-2 text-xs font-bold border border-gray-300 dark:border-zinc-700 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                    >
+                      🔄 {isUrdu ? "ڈیمو ڈیٹا دوبارہ لوڈ کریں" : "Reset Demo Data"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* Add / Edit Product Modal with Canvas WebP compression */}
+          {showProductModal && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-zinc-900 rounded-3xl p-5 w-full max-w-md space-y-3 shadow-xl max-h-[90vh] overflow-y-auto">
+                <div className="flex justify-between items-center pb-2 border-b dark:border-zinc-800">
+                  <h3 className="font-bold text-base text-emerald-950 dark:text-emerald-400">
+                    {modalProduct ? (isUrdu ? "کپڑا تبدیل کریں" : "Edit Product") : (isUrdu ? "نیا کپڑا شامل کریں" : "Add New Product")}
+                  </h3>
+                  <button onClick={() => setShowProductModal(false)} className="text-gray-400 hover:text-black">✕</button>
+                </div>
+
+                <form onSubmit={async (e) => {
+                  e.preventDefault();
+                  const form = e.target;
+                  const name = form.name.value.trim();
+                  const category = form.category.value;
+                  const price = Number(form.price.value) || 0;
+                  const stock = Number(form.stock.value) || 0;
+                  const image = modalProduct?.image || null;
+
+                  const db = await initDatabase();
+                  if (modalProduct) {
+                    const updated = { ...modalProduct, name, category, price, stock, image };
+                    await db.put('products', updated);
+                    setProducts(all => all.map(x => x.id === modalProduct.id ? updated : x));
+                  } else {
+                    const newProd = { id: Date.now(), name, category, price, stock, image };
+                    await db.put('products', newProd);
+                    setProducts(all => [newProd, ...all]);
+                  }
+                  setShowProductModal(false);
+                }} className="space-y-3 text-sm">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "نام / ورائٹی:" : "Fabric Name / Brand:"}</label>
+                    <input name="name" defaultValue={modalProduct?.name || ''} required className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm" />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "کیٹیگری:" : "Category:"}</label>
+                    <select name="category" defaultValue={modalProduct?.category || 'Wash & Wear'} className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-white dark:bg-zinc-800 text-sm">
+                      <option value="Wash & Wear">Wash & Wear (واش اینڈ ویئر)</option>
+                      <option value="Cotton">Cotton (کاٹن / لٹھا)</option>
+                      <option value="Kurta">Kurta (کرتہ)</option>
+                      <option value="Ladies">Ladies (لیڈیز)</option>
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "قیمت PKR:" : "Price PKR:"}</label>
+                      <input name="price" type="number" defaultValue={modalProduct?.price || ''} required className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "اسٹاک مقدار (سوٹ):" : "Stock Qty (Suits):"}</label>
+                      <input name="stock" type="number" defaultValue={modalProduct?.stock || ''} required className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm" />
+                    </div>
+                  </div>
+
+                  {/* Image input with canvas compression (Feature 2) */}
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">
+                      {isUrdu ? "کپڑے کی تصویر (500px WebP کمپریس):" : "Fabric Photo (Auto-compressed to 500px WebP):"}
+                    </label>
+                    <input 
+                      type="file" 
+                      accept="image/*"
+                      onChange={async (e) => {
+                        const file = e.target.files[0];
+                        if (file) {
+                          try {
+                            const compressed = await compressImageToWebP(file);
+                            setModalProduct(prev => ({ ...(prev || {}), image: compressed }));
+                          } catch (err) {
+                            alert('Image compression failed');
+                          }
+                        }
+                      }}
+                      className="text-xs w-full"
+                    />
+                    {modalProduct?.image && (
+                      <div className="mt-2 w-16 h-16 rounded-lg overflow-hidden border">
+                        <img src={modalProduct.image} className="w-full h-full object-cover" />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button type="submit" className="flex-1 py-2.5 bg-emerald-900 text-white font-bold rounded-xl text-sm hover:bg-emerald-800">
+                      {isUrdu ? "محفوظ کریں" : "Save Product"}
+                    </button>
+                    <button type="button" onClick={() => setShowProductModal(false)} className="px-4 py-2.5 border rounded-xl text-sm">
+                      {isUrdu ? "منسوخ" : "Cancel"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* Record Khata Payment Modal */}
+          {paymentModalCustomer && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-zinc-900 rounded-3xl p-5 w-full max-w-md space-y-3 shadow-xl">
+                <div className="flex justify-between items-center pb-2 border-b dark:border-zinc-800">
+                  <h3 className="font-bold text-base text-emerald-950 dark:text-emerald-400">
+                    {isUrdu ? "کھاتہ وصولی رقم درج کریں" : "Record Customer Payment"}
+                  </h3>
+                  <button onClick={() => setPaymentModalCustomer(null)} className="text-gray-400">✕</button>
+                </div>
+
+                <div className="bg-zinc-50 dark:bg-zinc-800/40 p-3 rounded-xl text-xs space-y-1">
+                  <p><span className="text-gray-400">{isUrdu ? "گاہک کا نام:" : "Customer:"}</span> <strong className="text-sm">{paymentModalCustomer.name}</strong></p>
+                  <p><span className="text-gray-400">{isUrdu ? "موبائل فون:" : "Phone:"}</span> {paymentModalCustomer.phone}</p>
+                  <p><span className="text-gray-400">{isUrdu ? "کل بقایا ادھار:" : "Current Udhaar:"}</span> <strong className="text-red-500">Rs. {paymentModalCustomer.udhaarBalance}</strong></p>
+                </div>
+
+                <form onSubmit={handleRecordPayment} className="space-y-3 text-sm">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "وصول شدہ رقم (روپے):" : "Amount Paid (PKR):"}</label>
+                    <input 
+                      type="number" 
+                      required 
+                      value={paymentAmount}
+                      onChange={e => setPaymentAmount(e.target.value)}
+                      placeholder={paymentModalCustomer.udhaarBalance ? String(paymentModalCustomer.udhaarBalance) : '0'} 
+                      className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm font-bold text-emerald-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">{isUrdu ? "نوٹ / تفصیل:" : "Payment Note:"}</label>
+                    <input 
+                      type="text" 
+                      value={paymentNote}
+                      onChange={e => setPaymentNote(e.target.value)}
+                      placeholder={isUrdu ? "مثلاً دکان پر نقد ادا کی" : "e.g. Cash received at shop"}
+                      className="w-full p-2.5 rounded-xl border dark:border-zinc-700 bg-transparent text-sm"
+                    />
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    <button type="submit" className="flex-1 py-2.5 bg-emerald-900 text-white font-bold rounded-xl text-sm hover:bg-emerald-800">
+                      {isUrdu ? "وصولی محفوظ کریں" : "Save Payment"}
+                    </button>
+                    <button type="button" onClick={() => setPaymentModalCustomer(null)} className="px-4 py-2.5 border rounded-xl text-sm">
+                      {isUrdu ? "منسوخ" : "Cancel"}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* View Customer Ledger Modal */}
+          {viewLedgerCustomer && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-zinc-900 rounded-3xl p-5 w-full max-w-lg space-y-3 shadow-xl max-h-[90vh] flex flex-col">
+                <div className="flex justify-between items-center pb-2 border-b dark:border-zinc-800">
+                  <div>
+                    <h3 className="font-bold text-base text-emerald-950 dark:text-emerald-400">
+                      {isUrdu ? `کھاتہ لیجر: ${viewLedgerCustomer.name}` : `Customer Ledger: ${viewLedgerCustomer.name}`}
+                    </h3>
+                    <p className="text-xs text-gray-500">{viewLedgerCustomer.phone}</p>
+                  </div>
+                  <button onClick={() => setViewLedgerCustomer(null)} className="text-gray-400">✕</button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto space-y-2 py-2">
+                  {khataEntries
+                    .filter(e => (e.customerPhone || '').trim() === viewLedgerCustomer.phone)
+                    .map(tx => (
+                      <div key={tx.id} className="flex justify-between items-center p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-xs">
+                        <div>
+                          <p className="font-bold">{tx.note || (tx.type === 'credit' ? (isUrdu ? 'ادھار مال خریدا' : 'Credit Purchase') : (isUrdu ? 'نقد وصولی' : 'Payment Received'))}</p>
+                          <p className="text-[11px] text-gray-400">📅 {tx.date}</p>
+                        </div>
+                        <div className={`font-bold text-sm ${tx.type === 'credit' ? 'text-red-600' : 'text-emerald-600'}`}>
+                          {tx.type === 'credit' ? `+ Rs. ${tx.amount}` : `- Rs. ${tx.amount}`}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+
+                <div className="border-t pt-2 flex justify-between font-bold text-sm">
+                  <span>{isUrdu ? "موجودہ بقایا:" : "Current Balance:"}</span>
+                  <span className="text-red-600 font-extrabold">Rs. {viewLedgerCustomer.udhaarBalance}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* PIN Setup Modal */}
+          {showPinSetupModal && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="bg-white dark:bg-zinc-900 rounded-3xl p-5 w-full max-w-xs space-y-3 shadow-xl">
+                <h3 className="font-bold text-base text-emerald-950 dark:text-emerald-400">
+                  {isUrdu ? "4 ہندسوں کا پن کوڈ سیٹ کریں" : "Set 4-Digit Security PIN"}
+                </h3>
+                <p className="text-xs text-gray-500">
+                  {isUrdu ? "ایپ کھولتے وقت یہ پن کوڈ پوچھا جائے گا" : "This PIN will be required whenever opening the app."}
+                </p>
+                <input 
+                  type="password"
+                  maxLength="4"
+                  value={newPinInput}
+                  onChange={e => setNewPinInput(e.target.value.replace(/[^0-9]/g, ''))}
+                  placeholder="e.g. 1234"
+                  className="w-full text-center tracking-widest text-2xl font-bold p-3 border rounded-xl dark:border-zinc-700 bg-transparent"
+                />
+                <div className="flex gap-2 pt-2">
+                  <button
+                    onClick={() => {
+                      if (newPinInput.length === 4) {
+                        localStorage.setItem('ddk_pin', newPinInput);
+                        setPinCode(newPinInput);
+                        setShowPinSetupModal(false);
+                        setNewPinInput('');
+                        alert(isUrdu ? "پن کوڈ کامیابی سے سیٹ ہو گیا!" : "PIN code set successfully!");
+                      } else {
+                        alert(isUrdu ? "برائے مہربانی 4 ہندسے درج کریں" : "Please enter exactly 4 digits");
+                      }
+                    }}
+                    className="flex-1 py-2 bg-emerald-900 text-white rounded-xl text-xs font-bold"
+                  >
+                    {isUrdu ? "محفوظ کریں" : "Save PIN"}
+                  </button>
+                  {pinCode && (
+                    <button
+                      onClick={() => {
+                        localStorage.removeItem('ddk_pin');
+                        setPinCode('');
+                        setShowPinSetupModal(false);
+                        setNewPinInput('');
+                        alert(isUrdu ? "پن کوڈ ختم کر دیا گیا" : "PIN removed!");
+                      }}
+                      className="px-3 py-2 text-xs bg-red-100 text-red-700 rounded-xl font-bold"
+                    >
+                      {isUrdu ? "ختم کریں" : "Remove"}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setShowPinSetupModal(false); setNewPinInput(''); }}
+                    className="px-3 py-2 text-xs border rounded-xl"
+                  >
+                    {isUrdu ? "منسوخ" : "Cancel"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Hidden Printable Container for Thermal 80mm or A4 */}
+          <div id="printable-area" className={`p-4 ${activePrintBill?.receiptType === 'thermal' || receiptType === 'thermal' ? 'print-thermal' : 'print-a4'}`}>
+            {(() => {
+              const b = activePrintBill || {
+                billNo: 'DDK-PREVIEW',
+                date: new Date().toISOString().slice(0, 10),
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                customerName: customerName || 'Customer',
+                customerPhone: customerPhone || '',
+                items: billItems,
+                subtotal,
+                discount,
+                grandTotal,
+                paidAmount: actualPaid,
+                udhaarAmount: udhaarBalance,
+                receiptType
+              };
+
+              const isThermal = (activePrintBill ? activePrintBill.receiptType : receiptType) === 'thermal';
+
+              if (isThermal) {
+                return (
+                  <div className="text-black text-center font-mono text-[11px] leading-tight space-y-1" dir={isUrdu ? 'rtl' : 'ltr'}>
+                    <p className="font-bold text-base">{shop.name}</p>
+                    <p className="text-[10px]">{shop.owner} • 📞 {shop.phone}</p>
+                    <p className="text-[9px]">{shop.address}</p>
+                    <p>--------------------------------</p>
+                    <div className="flex justify-between text-[10px] text-left rtl:text-right">
+                      <span>{isUrdu ? `بل نمبر: ${b.billNo}` : `Bill: ${b.billNo}`}</span>
+                      <span>{b.date} {b.time}</span>
+                    </div>
+                    <div className="text-left rtl:text-right text-[10px]">
+                      <span>{isUrdu ? "گاہک" : "Cust"}: {b.customerName} {b.customerPhone && b.customerPhone !== '---' ? `(${b.customerPhone})` : ''}</span>
+                    </div>
+                    <p>================================</p>
+                    <div className="text-left rtl:text-right space-y-1">
+                      {b.items.map((item, idx) => (
+                        <div key={idx}>
+                          <p className="font-bold">{item.name}</p>
+                          <div className="flex justify-between text-[10px]">
+                            <span>{item.qty} x Rs.{item.price}</span>
+                            <span>Rs.{item.qty * item.price}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p>--------------------------------</p>
+                    <div className="text-[11px] space-y-0.5">
+                      <div className="flex justify-between">
+                        <span>{isUrdu ? "سب ٹوٹل (Subtotal):" : "Subtotal:"}</span>
+                        <span>Rs.{b.subtotal}</span>
+                      </div>
+                      {b.discount > 0 && (
+                        <div className="flex justify-between">
+                          <span>{isUrdu ? "رعایت (Discount):" : "Discount:"}</span>
+                          <span>-Rs.{b.discount}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between font-bold text-sm border-t border-dashed pt-1">
+                        <span>{isUrdu ? "حتمی ٹوٹل (TOTAL):" : "TOTAL:"}</span>
+                        <span>Rs.{b.grandTotal}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>{isUrdu ? "وصول نقد (Cash Paid):" : "Paid Cash:"}</span>
+                        <span>Rs.{b.paidAmount}</span>
+                      </div>
+                      {b.udhaarAmount > 0 && (
+                        <div className="flex justify-between font-bold text-red-600">
+                          <span>{isUrdu ? "بقایا ادھار (Udhaar):" : "Balance Udhaar:"}</span>
+                          <span>Rs.{b.udhaarAmount}</span>
+                        </div>
+                      )}
+                    </div>
+                    <p>================================</p>
+                    <p className="text-[10px] pt-1 font-semibold">{isUrdu ? "شکریہ! خریدا ہوا مال واپس یا تبدیل نہیں ہوگا" : "Thank you! Goods once sold will not be returned"}</p>
+                    <p className="text-[9px] text-gray-600">Software by Dukaan Digital Kit (دکان ڈیجیٹل کٹ)</p>
+                  </div>
+                );
+              }
+
+              // A4 Standard Layout
+              return (
+                <div className="text-black space-y-4 p-4 border border-black rounded-lg" dir={isUrdu ? 'rtl' : 'ltr'}>
+                  <div className="flex justify-between items-center border-b pb-4">
+                    <div>
+                      <h1 className="text-2xl font-bold text-emerald-950">{shop.name}</h1>
+                      <p className="text-sm">{shop.owner} • 📞 {shop.phone}</p>
+                      <p className="text-xs text-gray-600">{shop.address}</p>
+                    </div>
+                    <div className="text-right rtl:text-left">
+                      <h2 className="text-xl font-bold uppercase tracking-wide">{isUrdu ? "سیلز انوائس / رسید" : "SALES INVOICE"}</h2>
+                      <p className="text-sm font-semibold">{b.billNo}</p>
+                      <p className="text-xs text-gray-600">{isUrdu ? "تاریخ" : "Date"}: {b.date} {b.time}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-gray-50 p-3 rounded text-sm">
+                    <p><strong>{isUrdu ? "گاہک کا نام (Customer):" : "Customer Name:"}</strong> {b.customerName}</p>
+                    {b.customerPhone && b.customerPhone !== '---' && <p><strong>{isUrdu ? "موبائل فون (Phone):" : "Phone:"}</strong> {b.customerPhone}</p>}
+                  </div>
+
+                  <table className="w-full text-sm border-collapse border border-gray-300">
+                    <thead>
+                      <tr className="bg-gray-100">
+                        <th className="border border-gray-300 p-2 text-left rtl:text-right">#</th>
+                        <th className="border border-gray-300 p-2 text-left rtl:text-right">{isUrdu ? "تفصیل کپڑا / Item Description" : "Item Description"}</th>
+                        <th className="border border-gray-300 p-2 text-right rtl:text-left">{isUrdu ? "تعداد / Qty" : "Qty"}</th>
+                        <th className="border border-gray-300 p-2 text-right rtl:text-left">{isUrdu ? "قیمت / Unit Price" : "Unit Price"}</th>
+                        <th className="border border-gray-300 p-2 text-right rtl:text-left">{isUrdu ? "ٹوٹل / Total" : "Total"}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {b.items.map((it, idx) => (
+                        <tr key={idx}>
+                          <td className="border border-gray-300 p-2">{idx + 1}</td>
+                          <td className="border border-gray-300 p-2 font-medium">{it.name}</td>
+                          <td className="border border-gray-300 p-2 text-right rtl:text-left">{it.qty}</td>
+                          <td className="border border-gray-300 p-2 text-right rtl:text-left">Rs. {it.price}</td>
+                          <td className="border border-gray-300 p-2 text-right rtl:text-left font-semibold">Rs. {it.qty * it.price}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  <div className="flex justify-end rtl:justify-start">
+                    <div className="w-64 space-y-1 text-sm">
+                      <div className="flex justify-between">
+                        <span>{isUrdu ? "سب ٹوٹل (Subtotal):" : "Subtotal:"}</span>
+                        <span>Rs. {b.subtotal}</span>
+                      </div>
+                      {b.discount > 0 && (
+                        <div className="flex justify-between text-red-600">
+                          <span>{isUrdu ? "رعایت (Discount):" : "Discount:"}</span>
+                          <span>-Rs. {b.discount}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between font-bold text-base border-t pt-1">
+                        <span>{isUrdu ? "حتمی رقم (Grand Total):" : "Grand Total:"}</span>
+                        <span>Rs. {b.grandTotal} PKR</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>{isUrdu ? "نقد ادا شدہ (Paid):" : "Paid Amount:"}</span>
+                        <span>Rs. {b.paidAmount}</span>
+                      </div>
+                      {b.udhaarAmount > 0 && (
+                        <div className="flex justify-between font-bold text-red-600">
+                          <span>{isUrdu ? "بقایا ادھار (Udhaar):" : "Udhaar Balance:"}</span>
+                          <span>Rs. {b.udhaarAmount}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="pt-8 border-t flex justify-between text-xs text-gray-500">
+                    <div>
+                      <p>{isUrdu ? "دستخط گاہک: __________________" : "Customer Signature: __________________"}</p>
+                    </div>
+                    <div className="text-right rtl:text-left">
+                      <p>{isUrdu ? "دستخط دکاندار: __________________" : "Authorized Signature: __________________"}</p>
+                      <p className="mt-1 font-semibold">{isUrdu ? "خریدا ہوا مال واپس یا تبدیل نہیں ہوگا • شکریہ!" : "Goods once sold will not be returned • Thank you for your business!"}</p>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Bottom Mobile Navigation Bar */}
+          <nav className="fixed bottom-0 left-0 right-0 z-40 bg-white/95 dark:bg-zinc-900/95 backdrop-blur border-t border-gray-200 dark:border-zinc-800 shadow-lg">
+            <div className="max-w-4xl mx-auto flex justify-around items-center">
+              <button
+                onClick={() => setTab('products')}
+                className={`flex flex-col items-center py-2 px-2.5 text-[11px] font-semibold transition-colors ${
+                  tab === 'products' ? 'text-emerald-900 dark:text-emerald-400 font-bold' : 'text-gray-400'
+                }`}
+              >
+                <span className="text-lg">🧵</span>
+                <span>{isUrdu ? "پراڈکٹس" : "Fabrics"}</span>
+              </button>
+
+              <button
+                onClick={() => setTab('billing')}
+                className={`relative flex flex-col items-center py-2 px-2.5 text-[11px] font-semibold transition-colors ${
+                  tab === 'billing' ? 'text-emerald-900 dark:text-emerald-400 font-bold' : 'text-gray-400'
+                }`}
+              >
+                <span className="text-lg">🧾</span>
+                <span>{isUrdu ? "بل جنریٹر" : "Billing"}</span>
+                {billItems.length > 0 && (
+                  <span className="absolute top-1 right-1.5 bg-emerald-700 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center font-bold">
+                    {billItems.length}
+                  </span>
+                )}
+              </button>
+
+              <button
+                onClick={() => setTab('sales')}
+                className={`flex flex-col items-center py-2 px-2.5 text-[11px] font-semibold transition-colors ${
+                  tab === 'sales' ? 'text-emerald-900 dark:text-emerald-400 font-bold' : 'text-gray-400'
+                }`}
+              >
+                <span className="text-lg">📜</span>
+                <span>{isUrdu ? "سیلز ہسٹری" : "Sales"}</span>
+              </button>
+
+              <button
+                onClick={() => setTab('khata')}
+                className={`relative flex flex-col items-center py-2 px-2.5 text-[11px] font-semibold transition-colors ${
+                  tab === 'khata' ? 'text-emerald-900 dark:text-emerald-400 font-bold' : 'text-gray-400'
+                }`}
+              >
+                <span className="text-lg">📒</span>
+                <span>{isUrdu ? "کھاتہ" : "Khata"}</span>
+                {totalPendingUdhaar > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full" />
+                )}
+              </button>
+
+              <button
+                onClick={() => setTab('dashboard')}
+                className={`flex flex-col items-center py-2 px-2.5 text-[11px] font-semibold transition-colors ${
+                  tab === 'dashboard' ? 'text-emerald-900 dark:text-emerald-400 font-bold' : 'text-gray-400'
+                }`}
+              >
+                <span className="text-lg">📊</span>
+                <span>{isUrdu ? "ڈیش بورڈ" : "Stats"}</span>
+              </button>
+
+              <button
+                onClick={() => setTab('settings')}
+                className={`flex flex-col items-center py-2 px-2.5 text-[11px] font-semibold transition-colors ${
+                  tab === 'settings' ? 'text-emerald-900 dark:text-emerald-400 font-bold' : 'text-gray-400'
+                }`}
+              >
+                <span className="text-lg">⚙️</span>
+                <span>{isUrdu ? "سیٹنگز" : "Settings"}</span>
+              </button>
+            </div>
+          </nav>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
