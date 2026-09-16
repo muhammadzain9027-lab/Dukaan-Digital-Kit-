@@ -1,133 +1,45 @@
-'use client'
+"use client"
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from 'react'
-import { BarChart3, Box, CheckCircle2, ClipboardList, ImagePlus, LayoutDashboard, PackagePlus, Search, ShoppingBag, Trash2, Upload, X } from 'lucide-react'
-import { toast, Toaster } from 'sonner'
-import './styles.css'
+import { useEffect, useMemo, useState } from "react"
+import { toast, Toaster } from "sonner"
+import { BarChart3, BookOpen, Check, ImagePlus, Minus, Package, Pencil, Plus, Printer, Search, Settings, ShoppingCart, Trash2, X } from "lucide-react"
+import "./styles.css"
 
-type Product = { id: string; name: string; price: number; stock: number; image?: string; createdAt: string }
-type FormValues = { name: string; price: string; stock: string; image?: string }
-const STORAGE_KEY = 'dukaan-products'
-const MAX_IMAGE_BYTES = 200 * 1024
+type Product = { id: number; name: string; nameUrdu: string; price: number; stock: number; category: string; imageBase64?: string; createdAt: string }
+type BillItem = { productId: number; qty: number; price: number; name: string }
+type Bill = { id: number; items: BillItem[]; total: number; discount: number; customerName: string; customerPhone: string; isUdhaar: boolean; remainingUdhaar: number; date: string }
+type Entry = { id: number; customerName: string; customerPhone: string; amount: number; type: "udhaar" | "payment"; billId?: number; date: string }
+type ShopSettings = { shopName: string; shopNameUrdu: string; address: string; phone: string; language: "en" | "ur"; currency: string }
+type Tab = "dashboard" | "inventory" | "sales" | "khata" | "settings"
 
-const starterProducts: Product[] = [
-  { id: 'starter-1', name: 'خالص شہد', price: 1850, stock: 24, createdAt: '2024-08-12' },
-  { id: 'starter-2', name: 'کپاس کا دوپٹہ', price: 2400, stock: 8, createdAt: '2024-08-09' },
-  { id: 'starter-3', name: 'ہاتھ کی بنی ٹوکری', price: 1250, stock: 16, createdAt: '2024-08-05' },
-]
+const seed: Product[] = [{ id: 1, name: "Premium Basmati Rice", nameUrdu: "پریمیم باسمتی چاول", price: 420, stock: 18, category: "Grocery", createdAt: new Date().toISOString() }, { id: 2, name: "White Shalwar Kameez", nameUrdu: "سفید شلوار قمیض", price: 2800, stock: 3, category: "Clothing", createdAt: new Date().toISOString() }, { id: 3, name: "Cooking Oil 1L", nameUrdu: "کوکنگ آئل ایک لیٹر", price: 620, stock: 26, category: "Grocery", createdAt: new Date().toISOString() }]
+const defaults: ShopSettings = { shopName: "Dukaan Digital Kit", shopNameUrdu: "دکان ڈیجیٹل کٹ", address: "Faisalabad Bazaar", phone: "", language: "en", currency: "Rs" }
+const text = { en: { dashboard: "Dashboard", inventory: "Inventory", sales: "Sales", khata: "Khata", settings: "Settings", products: "Products", add: "Add Product", save: "Save Product", cancel: "Cancel", search: "Search products...", low: "Low stock", today: "Today's sales", udhaar: "Total udhaar", recent: "Recent bills", empty: "No products yet", name: "Product name", urduName: "Urdu name", price: "Price", stock: "Stock", category: "Category", all: "All categories", restock: "Restock +5", salesTitle: "Create Bill", cart: "Cart", customer: "Customer name", phone: "Phone", discount: "Discount", paid: "Paid amount", credit: "Udhaar", saveBill: "Save bill", noItems: "Add products to begin", customers: "Customers", shop: "Shop settings", language: "Language" }, ur: { dashboard: "ڈیش بورڈ", inventory: "دکان", sales: "سیلز", khata: "کھاتہ", settings: "سیٹنگز", products: "مصنوعات", add: "مصنوعات شامل کریں", save: "محفوظ کریں", cancel: "منسوخ", search: "مصنوعات تلاش کریں...", low: "کم اسٹاک", today: "آج کی فروخت", udhaar: "کل ادھار", recent: "حالیہ بل", empty: "ابھی کوئی مصنوعات نہیں", name: "مصنوعہ کا نام", urduName: "اردو نام", price: "قیمت", stock: "اسٹاک", category: "زمرہ", all: "تمام زمرے", restock: "اسٹاک +5", salesTitle: "بل بنائیں", cart: "کارٹ", customer: "گاہک کا نام", phone: "فون", discount: "رعایت", paid: "ادا شدہ رقم", credit: "ادھار", saveBill: "بل محفوظ کریں", noItems: "شروع کرنے کے لیے مصنوعات شامل کریں", customers: "گاہک", shop: "دکان کی ترتیبات", language: "زبان" }}
 
-function readProducts(): Product[] {
-  try {
-    const stored = window.localStorage.getItem(STORAGE_KEY)
-    return stored ? JSON.parse(stored) : starterProducts
-  } catch { return starterProducts }
-}
-
-function compressImage(file: File): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    const reader = new FileReader()
-    reader.onload = () => {
-      const image = new Image()
-      image.onload = () => {
-        const scale = Math.min(1, 1000 / Math.max(image.width, image.height))
-        const canvas = document.createElement('canvas')
-        canvas.width = Math.max(1, Math.round(image.width * scale))
-        canvas.height = Math.max(1, Math.round(image.height * scale))
-        const context = canvas.getContext('2d')
-        if (!context) return resolve(undefined)
-        context.drawImage(image, 0, 0, canvas.width, canvas.height)
-        for (let quality = 0.82; quality >= 0.2; quality -= 0.08) {
-          const result = canvas.toDataURL('image/jpeg', quality)
-          if (result.length * 0.75 <= MAX_IMAGE_BYTES) return resolve(result)
-        }
-        resolve(undefined)
-      }
-      image.onerror = () => resolve(undefined)
-      image.src = String(reader.result)
-    }
-    reader.onerror = () => resolve(undefined)
-    reader.readAsDataURL(file)
-  })
-}
+const read = <T,>(key: string, fallback: T): T => { try { return JSON.parse(localStorage.getItem(key) || "null") ?? fallback } catch { return fallback } }
+const save = (key: string, value: unknown) => localStorage.setItem(key, JSON.stringify(value))
+const validPhone = (phone: string) => /^(03\d{9}|923\d{9})$/.test(phone.replace(/[\s-]/g, ""))
+function compressImage(file: File): Promise<string | undefined> { return new Promise(resolve => { const img = new Image(); img.onload = () => { const canvas = document.createElement("canvas"); const scale = Math.min(1, 900 / img.width); canvas.width = Math.max(1, Math.round(img.width * scale)); canvas.height = Math.max(1, Math.round(img.height * scale)); canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height); let quality = .8; let data = canvas.toDataURL("image/jpeg", quality); while (data.length > 265000 && quality > .2) { quality -= .08; data = canvas.toDataURL("image/jpeg", quality) } resolve(data.length <= 265000 ? data : undefined) }; img.src = URL.createObjectURL(file) }) }
 
 export default function Page() {
-  const [products, setProducts] = useState<Product[]>([])
-  const [form, setForm] = useState<FormValues>({ name: '', price: '', stock: '' })
-  const [errors, setErrors] = useState<Record<string, string>>({})
-  const [query, setQuery] = useState('')
-  const [isSaving, setIsSaving] = useState(false)
-  const [imageName, setImageName] = useState('')
-
-  useEffect(() => setProducts(readProducts()), [])
-  const filteredProducts = useMemo(() => products.filter((product) => product.name.toLowerCase().includes(query.toLowerCase())), [products, query])
-  const totalStock = products.reduce((sum, product) => sum + product.stock, 0)
-
-  function updateField(field: keyof FormValues, value: string) {
-    setForm((current) => ({ ...current, [field]: value }))
-    setErrors((current) => ({ ...current, [field]: '' }))
-  }
-
-  async function handleImage(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0]
-    if (!file) return
-    const compressed = await compressImage(file)
-    setImageName(compressed ? file.name : '')
-    setForm((current) => ({ ...current, image: compressed }))
-    if (!compressed) toast.info('تصویر 200 KB سے بڑی ہے، پروڈکٹ بغیر تصویر کے محفوظ ہوگی۔')
-  }
-
-  async function saveProduct(event: FormEvent) {
-    event.preventDefault()
-    const nextErrors: Record<string, string> = {}
-    const name = form.name.trim()
-    const price = Number(form.price)
-    const stock = Number(form.stock)
-    if (!name) nextErrors.name = 'پروڈکٹ کا نام درج کریں'
-    if (!form.price || !Number.isFinite(price) || price <= 0) nextErrors.price = 'درست قیمت درج کریں'
-    if (!form.stock || !Number.isInteger(stock) || stock < 0) nextErrors.stock = 'درست اسٹاک درج کریں'
-    if (Object.keys(nextErrors).length) {
-      setErrors(nextErrors)
-      toast.error('براہ کرم فارم کی معلومات درست کریں۔')
-      return
-    }
-    setIsSaving(true)
-    const product: Product = { id: crypto.randomUUID(), name, price, stock, image: form.image, createdAt: new Date().toISOString() }
-    const nextProducts = [product, ...products]
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(nextProducts))
-      setProducts(nextProducts)
-      setForm({ name: '', price: '', stock: '' })
-      setImageName('')
-      setErrors({})
-      toast.success('پروڈکٹ کامیابی سے محفوظ ہوگئی۔')
-    } catch {
-      toast.error('پروڈکٹ محفوظ نہیں ہوسکی۔ دوبارہ کوشش کریں۔')
-    } finally { setIsSaving(false) }
-  }
-
-  function removeProduct(id: string) {
-    const next = products.filter((product) => product.id !== id)
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
-    setProducts(next)
-    toast.success('پروڈکٹ حذف کردی گئی۔')
-  }
-
-  return <main dir="rtl" className="app-shell">
-    <Toaster position="top-center" dir="rtl" richColors />
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark"><ShoppingBag /></div><div><strong>دوکان</strong><span>Digital Kit</span></div></div>
-      <nav><a className="nav-item active"><LayoutDashboard /> ڈیش بورڈ</a><a className="nav-item"><Box /> پروڈکٹس <span className="nav-count">{products.length}</span></a><a className="nav-item"><ClipboardList /> آرڈرز</a><a className="nav-item"><BarChart3 /> رپورٹس</a></nav>
-      <div className="sidebar-footer"><div className="store-avatar">د</div><div><strong>میری دکان</strong><span>آن لائن</span></div><button aria-label="بند کریں"><X /></button></div>
-    </aside>
-    <section className="content-area">
-      <header className="topbar"><div><p className="eyebrow">خوش آمدید، زین</p><h1>پروڈکٹس</h1></div><div className="top-actions"><span className="status-dot">● دکان فعال ہے</span><div className="profile">ز</div></div></header>
-      <div className="content-grid">
-        <section className="products-panel"><div className="section-heading"><div><h2>تمام پروڈکٹس</h2><p>اپنے اسٹور کے پروڈکٹس کا نظم کریں</p></div><div className="search-box"><Search /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="پروڈکٹ تلاش کریں" aria-label="پروڈکٹ تلاش کریں" /></div></div>
-          <div className="stats-row"><div className="stat-card"><span>کل پروڈکٹس</span><strong>{products.length}</strong><small>اسٹور میں موجود</small></div><div className="stat-card"><span>کل اسٹاک</span><strong>{totalStock}</strong><small>یونٹس دستیاب</small></div><div className="stat-card"><span>کم اسٹاک</span><strong>{products.filter((p) => p.stock < 10).length}</strong><small>دوبارہ منگوانا ہے</small></div></div>
-          <div className="table-card"><div className="table-head"><span>پروڈکٹ</span><span>قیمت</span><span>اسٹاک</span><span>کارروائی</span></div>{filteredProducts.length ? filteredProducts.map((product) => <div className="product-row" key={product.id}><div className="product-cell"><div className="product-image">{product.image ? <img src={product.image} alt="" /> : <PackagePlus />}</div><div><strong>{product.name}</strong><small>شامل کیا گیا {new Date(product.createdAt).toLocaleDateString('ur-PK')}</small></div></div><span className="price">Rs. {product.price.toLocaleString('en-PK')}</span><span><b className={product.stock < 10 ? 'stock low' : 'stock'}>{product.stock}</b> یونٹس</span><button className="icon-button danger" onClick={() => removeProduct(product.id)} aria-label={`${product.name} حذف کریں`}><Trash2 /></button></div>) : <div className="empty-state"><PackagePlus /><strong>ابھی کوئی پروڈکٹ نہیں</strong><span>دائیں جانب فارم سے اپنی پہلی پروڈکٹ شامل کریں۔</span></div>}</div>
-        </section>
-        <section className="form-card"><div className="form-header"><div className="form-icon"><PackagePlus /></div><div><h2>نئی پروڈکٹ شامل کریں</h2><p>اپنی دکان میں نیا آئٹم شامل کریں</p></div></div><form onSubmit={saveProduct} noValidate><label className={errors.name ? 'has-error' : ''}>پروڈکٹ کا نام<input value={form.name} onChange={(e) => updateField('name', e.target.value)} placeholder="مثلاً: ہاتھ کی بنی ٹوکری" aria-invalid={!!errors.name} />{errors.name && <small>{errors.name}</small>}</label><div className="two-fields"><label className={errors.price ? 'has-error' : ''}>قیمت (روپے)<input type="number" min="1" value={form.price} onChange={(e) => updateField('price', e.target.value)} placeholder="0" aria-invalid={!!errors.price} />{errors.price && <small>{errors.price}</small>}</label><label className={errors.stock ? 'has-error' : ''}>اسٹاک<input type="number" min="0" value={form.stock} onChange={(e) => updateField('stock', e.target.value)} placeholder="0" aria-invalid={!!errors.stock} />{errors.stock && <small>{errors.stock}</small>}</label></div><label>تصویر <span className="optional">(اختیاری)</span><div className="upload-box"><input type="file" accept="image/*" onChange={handleImage} /><Upload /><span>{imageName || 'تصویر اپ لوڈ کرنے کے لیے کلک کریں'}</span><small>زیادہ سے زیادہ 200 KB</small></div></label><button className="save-button" type="submit" disabled={isSaving}>{isSaving ? 'محفوظ ہو رہا ہے...' : <><PackagePlus data-icon="inline-start" /> پروڈکٹ محفوظ کریں</>}</button><p className="form-note"><CheckCircle2 /> تصویر کے بغیر بھی پروڈکٹ محفوظ کی جاسکتی ہے</p></form></section>
-      </div>
-    </section>
-  </main>
+  const [settings, setSettings] = useState(defaults); const [products, setProducts] = useState<Product[]>([]); const [bills, setBills] = useState<Bill[]>([]); const [entries, setEntries] = useState<Entry[]>([]); const [tab, setTab] = useState<Tab>("dashboard"); const [ready, setReady] = useState(false); const [query, setQuery] = useState(""); const [category, setCategory] = useState("all"); const [modal, setModal] = useState(false); const [editing, setEditing] = useState<Product | null>(null); const [form, setForm] = useState({ name: "", nameUrdu: "", price: "", stock: "", category: "Grocery", imageBase64: "" }); const [cart, setCart] = useState<BillItem[]>([]); const [billForm, setBillForm] = useState({ customerName: "", customerPhone: "", discount: "0", paid: "0" })
+  useEffect(() => { setProducts(read("dukaan_products", seed)); setBills(read("dukaan_bills", [])); setEntries(read("dukaan_khata", [])); setSettings(read("shop_settings", defaults)); setReady(true); if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {}) }, [])
+  const l = text[settings.language]; const isUrdu = settings.language === "ur"; const filtered = products.filter(p => `${p.name} ${p.nameUrdu}`.toLowerCase().includes(query.toLowerCase()) && (category === "all" || p.category === category)); const today = new Date().toDateString(); const todaySales = bills.filter(b => new Date(b.date).toDateString() === today).reduce((sum, b) => sum + b.total, 0); const totalUdhaar = entries.reduce((sum, e) => sum + (e.type === "udhaar" ? e.amount : -e.amount), 0); const total = cart.reduce((sum, i) => sum + i.price * i.qty, 0); const finalTotal = Math.max(0, total - Number(billForm.discount || 0)); const pending = Math.max(0, finalTotal - Number(billForm.paid || 0))
+  if (!ready) return <div className="loading">Loading Dukaan Digital Kit...</div>
+  const nav = [{ id: "dashboard" as Tab, icon: BarChart3, label: l.dashboard }, { id: "inventory" as Tab, icon: Package, label: l.inventory }, { id: "sales" as Tab, icon: ShoppingCart, label: l.sales }, { id: "khata" as Tab, icon: BookOpen, label: l.khata }, { id: "settings" as Tab, icon: Settings, label: l.settings }]
+  const resetForm = () => { setForm({ name: "", nameUrdu: "", price: "", stock: "", category: "Grocery", imageBase64: "" }); setEditing(null) }
+  async function saveProduct(event: React.FormEvent) { event.preventDefault(); const price = Number(form.price); const stock = Number(form.stock); if (!form.name.trim() || !Number.isFinite(price) || price <= 0 || !form.stock || !Number.isInteger(stock) || stock < 0) return toast.error(isUrdu ? "نام، درست قیمت اور اسٹاک درج کریں" : "Enter a name, valid price, and whole-number stock"); const product: Product = { id: editing?.id || Date.now(), name: form.name.trim(), nameUrdu: form.nameUrdu.trim(), price, stock, category: form.category, imageBase64: form.imageBase64 || undefined, createdAt: editing?.createdAt || new Date().toISOString() }; const next = editing ? products.map(p => p.id === editing.id ? product : p) : [product, ...products]; setProducts(next); save("dukaan_products", next); setModal(false); resetForm(); toast.success(isUrdu ? "مصنوعہ محفوظ ہوگیا" : "Product saved") }
+  async function chooseImage(file?: File) { if (!file) return; const data = await compressImage(file); if (data) setForm(f => ({ ...f, imageBase64: data })); else toast.warning(isUrdu ? "تصویر بڑی ہے، بغیر تصویر کے محفوظ ہوگی" : "Image is too large after compression; saving without image") }
+  function addToCart(p: Product) { setCart(current => { const item = current.find(i => i.productId === p.id); return item ? current.map(i => i.productId === p.id ? { ...i, qty: Math.min(p.stock, i.qty + 1) } : i) : [...current, { productId: p.id, qty: 1, price: p.price, name: p.name }] }) }
+  function saveBill() { if (!cart.length) return toast.error(l.noItems); if (pending > 0 && !validPhone(billForm.customerPhone)) return toast.error("Udhaar k liye valid Pakistani number zaroori hai"); const bill: Bill = { id: Date.now(), items: cart, total: finalTotal, discount: Number(billForm.discount || 0), customerName: billForm.customerName, customerPhone: billForm.customerPhone, isUdhaar: pending > 0, remainingUdhaar: pending, date: new Date().toISOString() }; const nextBills = [bill, ...bills]; const nextProducts = products.map(p => { const item = cart.find(i => i.productId === p.id); return item ? { ...p, stock: Math.max(0, p.stock - item.qty) } : p }); setBills(nextBills); setProducts(nextProducts); save("dukaan_bills", nextBills); save("dukaan_products", nextProducts); if (pending > 0) { const nextEntries = [{ id: Date.now() + 1, customerName: billForm.customerName || "Walk-in", customerPhone: billForm.customerPhone, amount: pending, type: "udhaar" as const, billId: bill.id, date: new Date().toISOString() }, ...entries]; setEntries(nextEntries); save("dukaan_khata", nextEntries) } setCart([]); setBillForm({ customerName: "", customerPhone: "", discount: "0", paid: "0" }); toast.success(isUrdu ? "بل محفوظ ہوگیا" : "Bill saved") }
+  function updateSettings(next: ShopSettings) { setSettings(next); save("shop_settings", next); toast.success("Settings saved") }
+  return <main dir={isUrdu ? "rtl" : "ltr"} className="app-shell"><Toaster position="top-center" richColors /><aside className="sidebar"><div className="brand"><span className="brand-mark"><Package /></span><span><b>Dukaan</b><small>Digital Kit</small></span></div><nav>{nav.map(n => <button key={n.id} className={tab === n.id ? "active" : ""} onClick={() => setTab(n.id)}><n.icon />{n.label}</button>)}</nav><div className="sidebar-note">Offline-first<br /><b>آپ کی دکان، آپ کے ہاتھ</b></div></aside><section className="content-area"><header className="topbar"><div><p className="eyebrow">{settings.shopName}</p><h1>{nav.find(n => n.id === tab)?.label}</h1></div><button className="lang" onClick={() => updateSettings({ ...settings, language: isUrdu ? "en" : "ur" })}>{isUrdu ? "English" : "اردو"}</button></header><div className="content">{tab === "dashboard" && <Dashboard l={l} settings={settings} todaySales={todaySales} products={products} totalUdhaar={totalUdhaar} bills={bills} setTab={setTab} />}{tab === "inventory" && <Inventory l={l} products={filtered} query={query} setQuery={setQuery} category={category} setCategory={setCategory} openAdd={() => { resetForm(); setModal(true) }} edit={(p: Product) => { setEditing(p); setForm({ name: p.name, nameUrdu: p.nameUrdu, price: String(p.price), stock: String(p.stock), category: p.category, imageBase64: p.imageBase64 || "" }); setModal(true) }} remove={(id: number) => { const next = products.filter(p => p.id !== id); setProducts(next); save("dukaan_products", next); toast.success("Product deleted") }} restock={(id: number) => { const next = products.map(p => p.id === id ? { ...p, stock: p.stock + 5 } : p); setProducts(next); save("dukaan_products", next); toast.success(l.restock) }} />}{tab === "sales" && <Sales l={l} products={products} cart={cart} addToCart={addToCart} setCart={setCart} total={total} finalTotal={finalTotal} pending={pending} form={billForm} setForm={setBillForm} saveBill={saveBill} bills={bills} />}{tab === "khata" && <Khata l={l} entries={entries} />}{tab === "settings" && <SettingsView l={l} settings={settings} update={updateSettings} />}</div></section><div className="mobile-nav">{nav.map(n => <button key={n.id} className={tab === n.id ? "active" : ""} onClick={() => setTab(n.id)}><n.icon /><span>{n.label}</span></button>)}</div>{modal && <div className="modal-backdrop"><form className="modal" onSubmit={saveProduct}><div className="modal-head"><div><p className="eyebrow">Inventory</p><h2>{editing ? "Edit product" : l.add}</h2></div><button type="button" className="icon-btn" onClick={() => setModal(false)}><X /></button></div><div className="form-grid"><label>{l.name}<input autoFocus value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></label><label>{l.urduName}<input dir="rtl" value={form.nameUrdu} onChange={e => setForm({ ...form, nameUrdu: e.target.value })} /></label><label>{l.price}<input type="number" min="1" value={form.price} onChange={e => setForm({ ...form, price: e.target.value })} /></label><label>{l.stock}<input type="number" min="0" step="1" value={form.stock} onChange={e => setForm({ ...form, stock: e.target.value })} /></label><label>{l.category}<select value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}><option>Grocery</option><option>Clothing</option><option>Other</option></select></label><label className="upload">{form.imageBase64 ? <img src={form.imageBase64} alt="Product preview" /> : <><ImagePlus /><span>Optional image<br /><small>Compressed under 200 KB</small></span></>}<input type="file" accept="image/*" onChange={e => chooseImage(e.target.files?.[0])} /></label></div><div className="modal-actions"><button type="button" className="button ghost" onClick={() => setModal(false)}>{l.cancel}</button><button className="button primary"><Check />{l.save}</button></div></form></div>}</main>
 }
+
+function Dashboard({ l, settings, todaySales, products, totalUdhaar, bills, setTab }: any) { return <div className="stack"><div className="welcome"><div><span className="pill">{new Date().toLocaleDateString()}</span><h2>{settings.language === "ur" ? "آج کی دکان کیسی چل رہی ہے؟" : "Keep your shop moving."}</h2><p>{settings.language === "ur" ? "اپنی فروخت اور اسٹاک ایک نظر میں دیکھیں" : "A clear view of sales, stock, and customer credit."}</p></div><button className="button primary" onClick={() => setTab("sales")}><Plus />{l.sales}</button></div><div className="stats">{[[WalletIcon, l.today, `Rs ${todaySales.toLocaleString()}`], [Package, l.products, products.length], [BarChart3, l.low, products.filter((p: Product) => p.stock < 5).length], [BookOpen, l.udhaar, `Rs ${totalUdhaar.toLocaleString()}`]].map(([Icon, label, value]: any) => <div className="stat" key={label}><span className="stat-icon"><Icon /></span><small>{label}</small><strong>{value}</strong></div>)}</div><div className="panel"><div className="panel-head"><div><p className="eyebrow">Activity</p><h2>{l.recent}</h2></div></div>{bills.length ? bills.slice(0, 5).map((b: Bill) => <div className="list-row" key={b.id}><span className="avatar">{b.customerName?.[0] || "W"}</span><div><b>{b.customerName || "Walk-in customer"}</b><small>{new Date(b.date).toLocaleString()}</small></div><strong>Rs {b.total.toLocaleString()}</strong></div>) : <Empty text={l.noItems} icon={ShoppingCart} />}</div></div> }
+function WalletIcon(props: any) { return <svg {...props} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 7V5a2 2 0 0 0-2-2H5a3 3 0 0 0 0 6h15v10a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V6" /><path d="M16 13h2" /></svg> }
+function Inventory({ l, products, query, setQuery, category, setCategory, openAdd, edit, remove, restock }: any) { return <div className="stack"><div className="section-head"><div><p className="eyebrow">Catalog</p><h2>{l.products}</h2></div><button className="button primary" onClick={openAdd}><Plus />{l.add}</button></div><div className="toolbar"><div className="search"><Search /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={l.search} /></div><select value={category} onChange={e => setCategory(e.target.value)}><option value="all">{l.all}</option><option>Grocery</option><option>Clothing</option><option>Other</option></select></div>{products.length ? <div className="product-grid">{products.map((p: Product) => <article className="product-card" key={p.id}>{p.imageBase64 ? <img src={p.imageBase64} alt={p.name} /> : <div className="product-placeholder"><Package /></div>}<div className="product-body"><div className="product-top"><span className="category">{p.category}</span><button className="icon-btn" onClick={() => edit(p)}><Pencil /></button></div><h3>{p.name}</h3><p className="urdu">{p.nameUrdu}</p><div className="product-meta"><strong>Rs {p.price.toLocaleString()}</strong><span className={p.stock < 5 ? "stock low" : "stock"}>{p.stock} {l.stock}</span></div><div className="card-actions"><button className="button small" onClick={() => restock(p.id)}>{l.restock}</button><button className="icon-btn danger" onClick={() => remove(p.id)}><Trash2 /></button></div></div></article>)}</div> : <Empty text={l.empty} icon={Package} />}</div> }
+function Sales({ l, products, cart, addToCart, setCart, total, finalTotal, pending, form, setForm, saveBill, bills }: any) { return <div className="sales-layout"><div className="stack"><div className="section-head"><div><p className="eyebrow">Checkout</p><h2>{l.salesTitle}</h2></div></div><div className="panel product-picker">{products.map((p: Product) => <button key={p.id} className="pick" disabled={!p.stock} onClick={() => addToCart(p)}><span className="mini-product"><Package /></span><span><b>{p.name}</b><small>Rs {p.price} · {p.stock} left</small></span><Plus /></button>)}</div></div><div className="panel bill-panel"><div className="panel-head"><h2>{l.cart}</h2></div>{cart.length ? cart.map((i: BillItem) => <div className="cart-row" key={i.productId}><div><b>{i.name}</b><small>Rs {i.price} each</small></div><div className="qty"><button onClick={() => setCart(cart.map((x: BillItem) => x.productId === i.productId ? { ...x, qty: Math.max(0, x.qty - 1) } : x).filter((x: BillItem) => x.qty))}><Minus /></button><b>{i.qty}</b><button onClick={() => setCart(cart.map((x: BillItem) => x.productId === i.productId ? { ...x, qty: x.qty + 1 } : x))}><Plus /></button></div><strong>Rs {(i.price * i.qty).toLocaleString()}</strong></div>) : <Empty text={l.noItems} icon={ShoppingCart} />}<div className="bill-fields"><label>{l.customer}<input value={form.customerName} onChange={e => setForm({ ...form, customerName: e.target.value })} /></label><label>{l.phone}<input value={form.customerPhone} onChange={e => setForm({ ...form, customerPhone: e.target.value })} placeholder="03xxxxxxxxx" /></label><label>{l.discount}<input type="number" min="0" value={form.discount} onChange={e => setForm({ ...form, discount: e.target.value })} /></label><label>{l.paid}<input type="number" min="0" value={form.paid} onChange={e => setForm({ ...form, paid: e.target.value })} /></label></div><div className="totals"><span>{l.price} <b>Rs {total.toLocaleString()}</b></span><span>{l.discount} <b>- Rs {Number(form.discount || 0).toLocaleString()}</b></span><strong>{l.credit} <b>Rs {pending.toLocaleString()}</b></strong></div><button className="button primary wide" onClick={saveBill}><Check />{l.saveBill}</button><button className="button ghost wide" onClick={() => window.print()}><Printer /> Print</button></div><div className="panel sales-history"><h2>Sales history</h2>{bills.slice(0, 6).map((b: Bill) => <div className="list-row" key={b.id}><div><b>{b.customerName || "Walk-in"}</b><small>{new Date(b.date).toLocaleDateString()}</small></div><strong>Rs {b.total.toLocaleString()}</strong></div>)}</div></div> }
+function Khata({ l, entries }: any) { const groups = Object.values(entries.reduce((a: any, e: Entry) => { const key = e.customerPhone || e.customerName; a[key] ||= { name: e.customerName, phone: e.customerPhone, total: 0 }; a[key].total += e.type === "udhaar" ? e.amount : -e.amount; return a }, {})); return <div className="stack"><div className="section-head"><div><p className="eyebrow">Ledger</p><h2>{l.customers}</h2></div></div>{groups.length ? <div className="panel">{groups.map((c: any) => <div className="list-row" key={c.phone || c.name}><span className="avatar"><BookOpen /></span><div><b>{c.name}</b><small>{c.phone}</small></div><strong className={c.total > 0 ? "text-danger" : ""}>Rs {c.total.toLocaleString()}</strong></div>)}</div> : <Empty text="No customer credit yet" icon={BookOpen} />}</div> }
+function SettingsView({ l, settings, update }: any) { return <div className="settings-grid"><div className="panel"><p className="eyebrow">Brand</p><h2>{l.shop}</h2><div className="form-stack"><label>Shop name<input value={settings.shopName} onChange={e => update({ ...settings, shopName: e.target.value })} /></label><label>Urdu shop name<input dir="rtl" value={settings.shopNameUrdu} onChange={e => update({ ...settings, shopNameUrdu: e.target.value })} /></label><label>Address<input value={settings.address} onChange={e => update({ ...settings, address: e.target.value })} /></label><label>Phone<input value={settings.phone} onChange={e => update({ ...settings, phone: e.target.value })} /></label></div></div><div className="panel"><p className="eyebrow">Preferences</p><h2>{l.language}</h2><button className="language-option" onClick={() => update({ ...settings, language: "en" })}>English <Check className={settings.language === "en" ? "visible" : "hidden"} /></button><button className="language-option" onClick={() => update({ ...settings, language: "ur" })}>اردو <Check className={settings.language === "ur" ? "visible" : "hidden"} /></button></div></div> }
+function Empty({ text, icon: Icon }: any) { return <div className="empty"><Icon /><b>{text}</b></div> }

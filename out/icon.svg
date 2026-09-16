@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0F5132" />
+      <stop offset="50%" stop-color="#0B3E26" />
+      <stop offset="100%" stop-color="#062919" />
+    </linearGradient>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE68A" />
+      <stop offset="50%" stop-color="#F59E0B" />
+      <stop offset="100%" stop-color="#B45309" />
+    </linearGradient>
+    <linearGradient id="fabricGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#34D399" />
+      <stop offset="100%" stop-color="#10B981" />
+    </linearGradient>
+  </defs>
+  <!-- Background with rounded corners -->
+  <rect width="512" height="512" rx="112" fill="url(#bgGrad)" />
+  
+  <!-- Outer Gold Decorative Border -->
+  <rect x="24" y="24" width="464" height="464" rx="92" fill="none" stroke="url(#goldGrad)" stroke-width="6" opacity="0.4" stroke-dasharray="16,8" />
+  
+  <!-- Fabric Roll Cylinder Top -->
+  <g transform="translate(256, 230)">
+    <!-- Hanging Cloth Swatch -->
+    <path d="M-110, -20 Q -60, 140 -100, 170 Q -40, 160 0, 180 Q 40, 160 100, 170 Q 60, 140 110, -20 Z" fill="url(#fabricGrad)" opacity="0.9" />
+    
+    <!-- Cloth Fold Lines -->
+    <path d="M-50, 0 Q -20, 90 -45, 170" fill="none" stroke="#065F46" stroke-width="4" opacity="0.6" />
+    <path d="M30, 0 Q 50, 90 35, 175" fill="none" stroke="#065F46" stroke-width="4" opacity="0.6" />
+    
+    <!-- Fabric Roll (Thaan / تھان) Cylinder -->
+    <rect x="-130" y="-85" width="260" height="70" rx="35" fill="url(#goldGrad)" />
+    
+    <!-- Inner Roll Core -->
+    <ellipse cx="100" cy="-50" rx="20" ry="32" fill="#78350F" />
+    <ellipse cx="100" cy="-50" rx="10" ry="16" fill="#FDE68A" />
+    
+    <!-- Measuring Tape Ribbon -->
+    <path d="M-120, -40 Q 0, -20 120, -40" fill="none" stroke="#FEF3C7" stroke-width="8" stroke-dasharray="8,6" />
+
+    <!-- Shopping / Dukaan Tag -->
+    <g transform="translate(-10, 60)">
+      <polygon points="0,0 60,0 85,25 60,50 0,50" fill="#F59E0B" stroke="#78350F" stroke-width="3" />
+      <circle cx="20" cy="25" r="6" fill="#1F2937" />
+      <text x="35" y="32" font-family="sans-serif" font-size="20" font-weight="bold" fill="#78350F">PKR</text>
+    </g>
+  </g>
+  
+  <!-- Urdu Badge Banner -->
+  <rect x="96" y="400" width="320" height="60" rx="30" fill="#0B3E26" stroke="url(#goldGrad)" stroke-width="3" />
+  <text x="256" y="440" font-family="'Noto Nastaliq Urdu', serif, sans-serif" font-size="26" font-weight="bold" fill="#FDE68A" text-anchor="middle">دکان ڈیجیٹل کٹ</text>
+</svg>
