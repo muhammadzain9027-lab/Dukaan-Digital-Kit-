@@ -265,6 +265,10 @@ class DukaanViewModel(application: Application) : AndroidViewModel(application) 
         shopPreferences.toggleDarkMode(isDark)
     }
 
+    fun setAppTheme(theme: String) {
+        shopPreferences.setAppTheme(theme)
+    }
+
     fun reloadDemoData() {
         viewModelScope.launch {
             AppDatabase.populateInitialFabrics(database.productDao())

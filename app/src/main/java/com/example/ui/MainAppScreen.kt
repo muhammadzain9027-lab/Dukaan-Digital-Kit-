@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Dashboard
 import androidx.compose.material.icons.filled.Inventory
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Receipt
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
@@ -76,6 +77,23 @@ fun MainAppScreen(
                         )
                     },
                     actions = {
+                        // Quick theme switcher
+                        IconButton(
+                            onClick = {
+                                val themes = listOf("emerald", "royal", "maroon", "obsidian")
+                                val currentIndex = themes.indexOf(shopInfo.appTheme.lowercase()).let { if (it < 0) 0 else it }
+                                val nextTheme = themes[(currentIndex + 1) % themes.size]
+                                viewModel.setAppTheme(nextTheme)
+                            },
+                            modifier = Modifier.testTag("top_bar_theme_toggle")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Palette,
+                                contentDescription = "Switch Theme",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
                         // Quick language switch in top bar
                         IconButton(
                             onClick = { viewModel.toggleLanguage(!isUrdu) },

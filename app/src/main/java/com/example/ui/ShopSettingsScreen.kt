@@ -192,6 +192,74 @@ fun ShopSettingsScreen(
                             modifier = Modifier.testTag("dark_mode_toggle_switch")
                         )
                     }
+
+                    // Multi-Theme Selector (Emerald, Royal, Maroon, Obsidian)
+                    Column(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = if (isUrdu) "ایپ کا تھیم کلر (App Theme Color):" else "App Theme Color:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+
+                        val themes = listOf(
+                            Triple("emerald", if (isUrdu) "زمرد (Emerald)" else "Emerald Bazaar", androidx.compose.ui.graphics.Color(0xFF0F5132)),
+                            Triple("royal", if (isUrdu) "شاہی نیلا (Royal)" else "Royal Sapphire", androidx.compose.ui.graphics.Color(0xFF1D4ED8)),
+                            Triple("maroon", if (isUrdu) "شاہی قرمزی (Maroon)" else "Imperial Maroon", androidx.compose.ui.graphics.Color(0xFF9F1239)),
+                            Triple("obsidian", if (isUrdu) "جدید تاریک (Obsidian)" else "Obsidian Titanium", androidx.compose.ui.graphics.Color(0xFF334155))
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            themes.forEach { (key, name, color) ->
+                                val isSelected = shopInfo.appTheme.lowercase() == key
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isSelected) color.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceVariant,
+                                    border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, color) else null,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .clickable { viewModel.setAppTheme(key) }
+                                        .testTag("theme_button_$key")
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 4.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(24.dp)
+                                                .clip(CircleShape)
+                                                .background(color)
+                                                .border(1.dp, androidx.compose.ui.graphics.Color.White.copy(alpha = 0.5f), CircleShape),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            if (isSelected) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Save,
+                                                    contentDescription = "Selected",
+                                                    tint = androidx.compose.ui.graphics.Color.White,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            text = name,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                            fontSize = 9.5.sp,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
             val systemDark = isSystemInDarkTheme()
             val isDark = shopInfo.isDarkMode
 
-            DukaanTheme(darkTheme = isDark) {
+            DukaanTheme(themeKey = shopInfo.appTheme, darkTheme = isDark) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     MainAppScreen(viewModel = viewModel)
                 }

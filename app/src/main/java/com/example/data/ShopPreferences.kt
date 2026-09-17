@@ -13,7 +13,8 @@ data class ShopInfo(
     val shopAddress: String = "Shop #24, Main Cloth Market, Faisalabad",
     val shopLogoUri: String? = null,
     val isUrdu: Boolean = false,
-    val isDarkMode: Boolean = false
+    val isDarkMode: Boolean = false,
+    val appTheme: String = "emerald"
 )
 
 class ShopPreferences(context: Context) {
@@ -33,7 +34,8 @@ class ShopPreferences(context: Context) {
             shopAddress = prefs.getString("shop_address", "Shop #24, Main Cloth Market, Faisalabad") ?: "Shop #24, Main Cloth Market, Faisalabad",
             shopLogoUri = prefs.getString("shop_logo_uri", null),
             isUrdu = prefs.getBoolean("is_urdu", false),
-            isDarkMode = prefs.getBoolean("is_dark_mode", false)
+            isDarkMode = prefs.getBoolean("is_dark_mode", false),
+            appTheme = prefs.getString("app_theme", "emerald") ?: "emerald"
         )
     }
 
@@ -68,5 +70,10 @@ class ShopPreferences(context: Context) {
     fun toggleDarkMode(isDark: Boolean) {
         prefs.edit().putBoolean("is_dark_mode", isDark).apply()
         _shopInfoFlow.value = _shopInfoFlow.value.copy(isDarkMode = isDark)
+    }
+
+    fun setAppTheme(theme: String) {
+        prefs.edit().putString("app_theme", theme).apply()
+        _shopInfoFlow.value = _shopInfoFlow.value.copy(appTheme = theme)
     }
 }
