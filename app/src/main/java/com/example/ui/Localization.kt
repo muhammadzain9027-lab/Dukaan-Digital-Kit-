@@ -60,8 +60,11 @@ object Strings {
     fun stockLabel(isUrdu: Boolean) = if (isUrdu) "اسٹاک کی مقدار (تھان / سوٹ)" else "Stock Quantity (Suits/Than)"
     fun notesLabel(isUrdu: Boolean) = if (isUrdu) "تفصیل / کوالٹی نوٹس" else "Details / Quality Notes"
     fun uploadImage(isUrdu: Boolean) = if (isUrdu) "تصویر لگائیں" else "Upload Image"
+    fun removePhoto(isUrdu: Boolean) = if (isUrdu) "تصویر ہٹائیں" else "Remove Photo"
     fun save(isUrdu: Boolean) = if (isUrdu) "محفوظ کریں" else "Save"
     fun cancel(isUrdu: Boolean) = if (isUrdu) "منسوخ" else "Cancel"
+    fun productSaved(isUrdu: Boolean) = if (isUrdu) "نیا کپڑا کامیابی سے شامل ہو گیا! ✓" else "Product added successfully! ✓"
+    fun productUpdated(isUrdu: Boolean) = if (isUrdu) "کپڑا کامیابی سے تبدیل ہو گیا! ✓" else "Product updated successfully! ✓"
 
     // Billing
     fun billGeneratorTitle(isUrdu: Boolean) = if (isUrdu) "نئی رسید / بل" else "Bill / Receipt Generator"

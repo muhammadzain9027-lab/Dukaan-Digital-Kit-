@@ -3,8 +3,12 @@ package com.example.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.print.PrintAttributes
 import android.print.PrintManager
+import android.util.Log
+import android.view.View
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -216,25 +220,60 @@ object PrintAndShareHelper {
         </html>
         """.trimIndent()
 
-        // Create an offscreen WebView to execute print job
-        val webView = WebView(context)
-        webView.webViewClient = object : WebViewClient() {
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+        // Create an offscreen WebView to execute print job safely
+        try {
+            val webView = WebView(context)
+            // In virtualized/emulator environments without GPU rendernode, disable hardware acceleration
+            // to avoid MESA "Failed to open rendernode" and chromium GPU renderer crashes
+            webView.setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+            webView.settings.apply {
+                javaScriptEnabled = false
+                domStorageEnabled = false
+                setSupportZoom(false)
+            }
 
-            override fun onPageFinished(view: WebView, url: String) {
-                val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
-                if (printManager != null) {
-                    val printAdapter = webView.createPrintDocumentAdapter("Bill_$billNumber")
-                    val printJob = printManager.print(
-                        "Dukaan Bill $billNumber",
-                        printAdapter,
-                        PrintAttributes.Builder().build()
-                    )
-                } else {
-                    Toast.makeText(context, "Print service not available", Toast.LENGTH_SHORT).show()
+            webView.webViewClient = object : WebViewClient() {
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+
+                override fun onRenderProcessGone(view: WebView?, detail: RenderProcessGoneDetail?): Boolean {
+                    Log.w("PrintHelper", "WebView render process exited, falling back to plain share")
+                    try {
+                        view?.destroy()
+                    } catch (_: Exception) {}
+                    // Fallback to text share if printer renderer crashes
+                    shareBillText(context, shopInfo, customerName, customerPhone, items, discount, total, billNumber, isUrdu)
+                    return true // Return true indicates the host application handled the exit
+                }
+
+                override fun onPageFinished(view: WebView, url: String) {
+                    try {
+                        val printManager = context.getSystemService(Context.PRINT_SERVICE) as? PrintManager
+                        if (printManager != null) {
+                            val printAdapter = webView.createPrintDocumentAdapter("Bill_$billNumber")
+                            printManager.print(
+                                "Dukaan Bill $billNumber",
+                                printAdapter,
+                                PrintAttributes.Builder().build()
+                            )
+                        } else {
+                            Toast.makeText(context, if (isUrdu) "پرنٹ کی سہولت دستیاب نہیں" else "Print service not available", Toast.LENGTH_SHORT).show()
+                            shareBillText(context, shopInfo, customerName, customerPhone, items, discount, total, billNumber, isUrdu)
+                        }
+                    } catch (e: Exception) {
+                        Log.e("PrintHelper", "Error starting print job", e)
+                        shareBillText(context, shopInfo, customerName, customerPhone, items, discount, total, billNumber, isUrdu)
+                    }
                 }
             }
+            webView.loadDataWithBaseURL(null, htmlContent, "text/html", "UTF-8", null)
+        } catch (e: Throwable) {
+            Log.e("PrintHelper", "Cannot initialize WebView for printing", e)
+            Toast.makeText(
+                context,
+                if (isUrdu) "رسید ٹیکسٹ فارمیٹ میں شیئر کی جا رہی ہے" else "Sharing bill as text format",
+                Toast.LENGTH_SHORT
+            ).show()
+            shareBillText(context, shopInfo, customerName, customerPhone, items, discount, total, billNumber, isUrdu)
         }
-        webView.loadDataWithBaseURL(null, htmlContent, "text/HTML", "UTF-8", null)
     }
 }

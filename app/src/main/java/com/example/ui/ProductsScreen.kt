@@ -45,12 +45,16 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,6 +62,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import kotlinx.coroutines.launch
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -85,9 +90,13 @@ fun ProductsScreen(
     val editingProduct by viewModel.editingProduct.collectAsState()
     val isUrdu = shopInfo.isUrdu
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    val coroutineScope = rememberCoroutineScope()
+
     val categories = listOf("All", "Wash & Wear", "Cotton", "Kurta", "Ladies")
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             FloatingActionButton(
                 onClick = { viewModel.openAddProduct() },
@@ -279,12 +288,17 @@ fun ProductsScreen(
 
     // Add / Edit Product Dialog
     if (isAddEditOpen) {
+        val wasEditing = editingProduct != null
         AddEditProductDialog(
             product = editingProduct,
             isUrdu = isUrdu,
             onDismiss = { viewModel.dismissAddEdit() },
             onSave = { name, category, price, stock, imageUri, notes ->
                 viewModel.saveProduct(name, category, price, stock, imageUri, notes)
+                val msg = if (wasEditing) Strings.productUpdated(isUrdu) else Strings.productSaved(isUrdu)
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar(msg)
+                }
             }
         )
     }
